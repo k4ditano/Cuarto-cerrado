@@ -163,7 +163,7 @@ IMPORTANTE: las iniciales de "words" en orden DEBEN formar exactamente "finalWor
 
   return (
     <GameShell title={game.title} subtitle="Anagramas" onExit={onExit} difficulty={difficulty} timer={timer}>
-      <Paper style={{ marginBottom: '1.5rem' }}><p style={{ fontStyle: 'italic', margin: 0 }}>{game.intro}</p></Paper>
+      <CaseBanner emoji="🔤" title={game.title} theme={game.theme} subtitle={game.intro} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: '2rem' }}>
         <Paper aged>

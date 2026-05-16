@@ -502,5 +502,42 @@ function PoolBrowser({ gameId, onClose, onPick }) {
   );
 }
 
+// ─── CaseBanner: cabecera decorativa con tema ──────────────────────────
+function CaseBanner({ emoji, title, theme, subtitle }) {
+  // Hash del título para color estable por caso
+  const hash = (title || '').split('').reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+  const hue = Math.abs(hash) % 360;
+  const accent = `oklch(0.55 0.16 ${hue})`;
+  const bg = `linear-gradient(135deg, oklch(0.9 0.05 ${hue}), oklch(0.94 0.025 ${(hue + 30) % 360}))`;
+  return (
+    <div className="paper aged" style={{
+      padding: '1.5rem 2rem',
+      marginBottom: '1.5rem',
+      position: 'relative',
+      background: bg,
+      borderLeft: `6px solid ${accent}`,
+      overflow: 'hidden',
+    }}>
+      <div style={{
+        position: 'absolute', top: -20, right: -20,
+        fontSize: 140, opacity: .08, transform: 'rotate(-12deg)', lineHeight: 1,
+        pointerEvents: 'none',
+      }}>{emoji}</div>
+      <div className="row gap-sm" style={{ alignItems: 'center', position: 'relative' }}>
+        <div style={{ fontSize: 38, lineHeight: 1 }}>{emoji}</div>
+        <div style={{ flex: 1 }}>
+          {theme && (
+            <div className="font-typewriter tiny" style={{ letterSpacing: '.2em', color: 'var(--ink-faded)', textTransform: 'uppercase' }}>
+              tema · {theme}
+            </div>
+          )}
+          <h1 className="font-display" style={{ margin: '.2rem 0 0', color: accent, fontSize: '1.6rem' }}>{title}</h1>
+          {subtitle && <p className="tiny muted" style={{ margin: '.3rem 0 0', fontStyle: 'italic' }}>{subtitle}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Export al window para uso global
-Object.assign(window, { Paper, Stamp, Topbar, Loader, BigLoader, LiveLoader, useStatusFeed, Typewriter, Modal, GameShell, DifficultyPicker, APIStatus, ShareBar, Leaderboard, GameSetup, ModeCard, PoolBrowser });
+Object.assign(window, { Paper, Stamp, Topbar, Loader, BigLoader, LiveLoader, useStatusFeed, Typewriter, Modal, GameShell, DifficultyPicker, APIStatus, ShareBar, Leaderboard, GameSetup, ModeCard, PoolBrowser, CaseBanner });

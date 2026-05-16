@@ -233,10 +233,92 @@ Devuelve EXACTAMENTE este JSON:
 }
 
 function MapdokuGrid({ puzzle, grid, setCell, disabled }) {
-  const [picker, setPicker] = useState(null); // {posIdx, catName}
+  const [selected, setSelected] = useState(null); // {catName, value}
+
+  // Para saber qué valores están ya usados en cada categoría
+  const usedByCategory = {};
+  puzzle.categories.forEach((cat) => {
+    usedByCategory[cat.name] = new Set();
+    puzzle.positions.forEach((_, posIdx) => {
+      const v = grid[posIdx]?.[cat.name];
+      if (v) usedByCategory[cat.name].add(v);
+    });
+  });
+
+  // Paleta sutil por categoría para distinguir chips
+  const catColors = [
+    'oklch(0.85 0.06 25)',   // rojizo
+    'oklch(0.85 0.06 240)',  // azulado
+    'oklch(0.85 0.06 145)',  // verdoso
+    'oklch(0.85 0.06 80)',   // dorado
+    'oklch(0.85 0.06 320)',  // rosa
+  ];
+  const catColor = (i) => catColors[i % catColors.length];
+
+  const placeIn = (posIdx) => {
+    if (!selected) return;
+    if (selected.catName !== null) {
+      // Si ya hay un chip aquí (mismo cat), lo reemplazamos
+      setCell(posIdx, selected.catName, selected.value);
+      setSelected(null);
+    }
+  };
+
+  const removeFromCell = (posIdx, catName) => {
+    setCell(posIdx, catName, null);
+  };
 
   return (
     <>
+      {/* Bandejas de chips por categoría */}
+      <div className="col" style={{ gap: '.6rem', marginBottom: '1.2rem' }}>
+        {puzzle.categories.map((cat, ci) => (
+          <div key={cat.name} className="paper" style={{
+            padding: '.5rem .7rem',
+            background: catColor(ci),
+            borderLeft: '4px solid var(--ink)',
+          }}>
+            <div className="font-typewriter tiny" style={{ letterSpacing: '.18em', textTransform: 'uppercase', color: 'var(--ink)', marginBottom: '.3rem' }}>
+              {cat.name}
+            </div>
+            <div className="row gap-sm wrap">
+              {cat.values.map((v) => {
+                const used = usedByCategory[cat.name].has(v);
+                const isSelected = selected?.catName === cat.name && selected?.value === v;
+                return (
+                  <button
+                    key={v}
+                    disabled={disabled || (used && !isSelected)}
+                    onClick={() => setSelected(isSelected ? null : { catName: cat.name, value: v })}
+                    style={{
+                      fontFamily: 'Caveat, cursive',
+                      fontSize: '1.15rem',
+                      padding: '.3rem .8rem',
+                      background: isSelected ? 'var(--ink)' : (used ? 'rgba(50,40,30,.15)' : 'var(--paper)'),
+                      color: isSelected ? 'var(--paper)' : (used ? 'var(--ink-soft)' : 'var(--ink)'),
+                      border: `1px dashed ${isSelected ? 'var(--ink)' : 'var(--ink-soft)'}`,
+                      borderRadius: 14,
+                      cursor: disabled || (used && !isSelected) ? 'default' : 'pointer',
+                      textDecoration: used && !isSelected ? 'line-through' : 'none',
+                      transition: 'transform .1s',
+                      transform: isSelected ? 'scale(1.05)' : 'scale(1)',
+                    }}>
+                    {v}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {selected && (
+        <div className="tiny" style={{ marginBottom: '.6rem', padding: '.4rem .7rem', background: 'rgba(80,140,200,.1)', borderLeft: '3px solid var(--stamp-blue)' }}>
+          <strong>{selected.value}</strong> seleccionado · pulsa en una celda de <strong>{selected.catName}</strong> para colocarlo. <button className="btn ghost small" onClick={() => setSelected(null)} style={{ marginLeft: '.5rem', padding: '.1rem .4rem', fontSize: '.65rem' }}>cancelar</button>
+        </div>
+      )}
+
+      {/* Cuadrícula */}
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', margin: '0 auto', minWidth: '100%' }}>
           <thead>
@@ -251,26 +333,42 @@ function MapdokuGrid({ puzzle, grid, setCell, disabled }) {
             </tr>
           </thead>
           <tbody>
-            {puzzle.categories.map((cat) => (
+            {puzzle.categories.map((cat, ci) => (
               <tr key={cat.name}>
-                <td className="font-typewriter" style={{ padding: '.6rem .8rem', borderRight: '2px solid var(--ink)', fontSize: '.78rem', letterSpacing: '.12em', textTransform: 'uppercase', textAlign: 'right' }}>
+                <td className="font-typewriter" style={{
+                  padding: '.6rem .8rem', borderRight: '2px solid var(--ink)',
+                  fontSize: '.78rem', letterSpacing: '.12em', textTransform: 'uppercase',
+                  textAlign: 'right',
+                  background: catColor(ci),
+                }}>
                   {cat.name}
                 </td>
                 {puzzle.positions.map((_, i) => {
                   const val = grid[i]?.[cat.name];
+                  const canPlaceHere = selected && selected.catName === cat.name;
                   return (
-                    <td key={i} style={{ border: '1px dashed var(--ink-soft)', padding: 0 }}>
+                    <td key={i} style={{
+                      border: '1px dashed var(--ink-soft)',
+                      padding: 0,
+                      background: canPlaceHere && !val ? 'rgba(80,140,200,.08)' : (val ? 'rgba(255,250,200,.4)' : 'transparent'),
+                      transition: 'background .15s',
+                    }}>
                       <button
-                        disabled={disabled}
-                        onClick={() => setPicker({ posIdx: i, catName: cat.name })}
+                        disabled={disabled || (!val && !canPlaceHere)}
+                        onClick={() => {
+                          if (val) removeFromCell(i, cat.name);
+                          else placeIn(i);
+                        }}
                         style={{
-                          width: '100%', minWidth: 110, height: 56,
-                          background: val ? 'rgba(255,250,200,.4)' : 'transparent',
-                          border: 'none', cursor: disabled ? 'default' : 'pointer',
-                          fontFamily: 'Caveat, cursive', fontSize: '1.25rem', color: 'var(--ink)',
+                          width: '100%', minWidth: 110, height: 60,
+                          background: 'transparent',
+                          border: 'none',
+                          cursor: disabled ? 'default' : (val || canPlaceHere ? 'pointer' : 'default'),
+                          fontFamily: 'Caveat, cursive', fontSize: '1.3rem', color: 'var(--ink)',
                           padding: '.3rem',
-                        }}>
-                        {val || <span style={{ fontFamily: 'Special Elite', fontSize: '.7rem', color: 'var(--ink-soft)', letterSpacing: '.15em' }}>—</span>}
+                        }}
+                        title={val ? 'Click para quitar' : (canPlaceHere ? `Colocar ${selected.value}` : '')}>
+                        {val || (canPlaceHere ? <span style={{ fontSize: '1.6rem', opacity: .35 }}>+</span> : <span style={{ fontFamily: 'Special Elite', fontSize: '.7rem', color: 'var(--ink-soft)', letterSpacing: '.15em' }}>—</span>)}
                       </button>
                     </td>
                   );
@@ -281,23 +379,9 @@ function MapdokuGrid({ puzzle, grid, setCell, disabled }) {
         </table>
       </div>
 
-      {picker && (
-        <Modal onClose={() => setPicker(null)} title={picker.catName}>
-          <p className="tiny muted">Asigna un valor a {puzzle.positions[picker.posIdx]}</p>
-          <div className="col gap-sm">
-            {puzzle.categories.find(c => c.name === picker.catName).values.map((v) => (
-              <button key={v} className="btn ghost" onClick={() => {
-                setCell(picker.posIdx, picker.catName, v);
-                setPicker(null);
-              }} style={{ textAlign: 'left', justifyContent: 'flex-start' }}>{v}</button>
-            ))}
-            <button className="btn ghost small" onClick={() => {
-              setCell(picker.posIdx, picker.catName, null);
-              setPicker(null);
-            }}>Vaciar</button>
-          </div>
-        </Modal>
-      )}
+      <div className="tiny muted" style={{ marginTop: '.8rem', textAlign: 'center' }}>
+        Pulsa un chip arriba → pulsa una casilla para colocarlo · pulsa un chip ya colocado para quitarlo
+      </div>
     </>
   );
 }

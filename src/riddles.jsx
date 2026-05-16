@@ -60,6 +60,7 @@ Devuelve este JSON:
 {
   "title": "Título evocador",
   "intro": "2 frases que sitúan al jugador.",
+  "theme": "${theme}",
   "riddles": [
     {"q": "Acertijo en 2-4 versos cortos en español", "a": "palabra-respuesta-en-minusculas-sin-tildes", "hint": "Pista sutil de 1 frase"}
   ],
@@ -138,7 +139,7 @@ IMPORTANTE: la concatenación de la primera letra de cada respuesta DEBE formar 
 
   return (
     <GameShell title={chain.title} subtitle="Cadena de acertijos" onExit={onExit} difficulty={difficulty} timer={timer}>
-      <Paper style={{ marginBottom: '1.5rem' }}><p style={{ fontStyle: 'italic', margin: 0 }}>{chain.intro}</p></Paper>
+      <CaseBanner emoji="🧩" title={chain.title} theme={chain.theme} subtitle={chain.intro} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 280px', gap: '2rem' }}>
         <Paper aged>

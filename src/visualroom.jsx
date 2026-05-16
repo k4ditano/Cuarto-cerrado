@@ -1,6 +1,7 @@
 // ─── Cuarto Cerrado — Habitación Visual ────────────────────────────────
-// La IA genera una imagen muy detallada de una escena, junto con una lista
-// de preguntas u "objetos a encontrar". La jugadora responde mirando.
+// Escena con muchos objetos visibles. Preguntas de dos tipos:
+//   - "text"  → escribe la respuesta (color, cuenta, etc.)
+//   - "click" → señala el lugar de la imagen donde está la respuesta
 
 const VISUAL_SCENES = [
   'un despacho victoriano lleno de objetos curiosos',
@@ -10,6 +11,8 @@ const VISUAL_SCENES = [
   'un cuarto de niño abandonado durante décadas',
   'el taller de un relojero con piezas por todas partes',
   'una librería privada donde algo se ha movido recientemente',
+  'una cocina de una bruja con tarros y cazuelas',
+  'un dormitorio de una poeta con manuscritos por el suelo',
 ];
 
 function VisualGame({ opts = {}, onExit }) {
@@ -18,9 +21,11 @@ function VisualGame({ opts = {}, onExit }) {
   const [scenario, setScenario] = useState(null);
   const [poolId, setPoolId] = useState(null);
   const [image, setImage] = useState(null);
-  const [answers, setAnswers] = useState({}); // {questionIdx: string}
-  const [results, setResults] = useState(null); // {questionIdx: bool}
-  const [hintTexts, setHintTexts] = useState({}); // {questionIdx: string}
+  const [answers, setAnswers] = useState({});      // text answers {qIdx: str}
+  const [clicks, setClicks] = useState({});        // click answers {qIdx: {x,y}}
+  const [activeQ, setActiveQ] = useState(null);    // index of question being clicked
+  const [results, setResults] = useState(null);    // {qIdx: bool}
+  const [hintTexts, setHintTexts] = useState({});
   const [hintBusy, setHintBusy] = useState({});
   const [timer, setTimer] = useState(0);
   const [error, setError] = useState(null);
@@ -38,29 +43,24 @@ function VisualGame({ opts = {}, onExit }) {
   }, [phase]);
 
   const loadFromCase = async (data, poolIdInput, preImage) => {
-    setScenario(data); setAnswers({}); setResults(null); setTimer(0);
+    setScenario(data); setAnswers({}); setClicks({}); setResults(null); setTimer(0);
     setPoolId(poolIdInput || null);
-    // Si el caso del pool ya trae imagen embebida, usarla
     const existingImage = preImage || data._image || null;
     setImage(existingImage);
     startTs.current = Date.now();
-    if (existingImage) {
-      setPhase('playing');
-      return;
-    }
-    // Generar imagen (parte de la carga visible)
+    if (existingImage) { setPhase('playing'); return; }
     if (CC.config.hasOpenAI) {
       push('Pintando la escena (gpt-image-1, low)');
       try {
         const img = await CC.image({ prompt: data.imagePrompt + '. Highly detailed, painterly, vintage, warm tungsten light, no text, no captions.', quality: 'low', size: '1024x1024' });
         done();
         setImage(img);
-        // guardar la imagen dentro del caso para compartir
         data._image = img;
+        if (poolIdInput) CC.poolUpdate('visual', poolIdInput, data);
       } catch (e) { setError('No se pudo generar la imagen: ' + e.message); }
     }
     push('Enmarcando y colgando en la pared');
-    await new Promise(r => setTimeout(r, 400));
+    await new Promise(r => setTimeout(r, 300));
     done();
     setPhase('playing');
   };
@@ -75,25 +75,28 @@ function VisualGame({ opts = {}, onExit }) {
       const sys = 'Diseñador de puzzles de observación. Respondes SOLO con JSON válido en español.';
       const prompt = `Diseña un puzzle visual ambientado en: ${setting}.
 
-Necesito una escena MUY detallada con muchos objetos identificables. Después de generar la imagen, la jugadora responderá ${N} preguntas sobre lo que ve.
+La jugadora verá una imagen muy detallada y responderá ${N} preguntas mirando. Algunas serán de texto, otras de CLICK sobre la imagen.
 
-Devuelve este JSON:
+Devuelve EXACTAMENTE este JSON:
 {
   "title": "Título evocador",
   "intro": "2 frases que sitúan la escena.",
-  "imagePrompt": "Prompt MUY detallado en INGLÉS para gpt-image-1. Lista 15-20 objetos visibles concretos con sus posiciones aproximadas. Estilo: 'detailed illustration, vintage, warm tones, painted, lots of small props visible, no text labels'. Importante: SIN TEXTO en la imagen.",
+  "imagePrompt": "Prompt MUY detallado en INGLÉS para gpt-image-1. Lista 15-20 objetos visibles concretos con sus POSICIONES aproximadas (upper-left, center, bottom-right, on the desk, etc.). Para las preguntas de tipo 'click' debe haber elementos identificables EXACTAMENTE en las coordenadas que indiques en 'target'. Estilo: 'detailed illustration, vintage, warm tones, painted, no text, no captions'.",
   "questions": [
-    {"q": "Pregunta sobre algo visible o contable", "a": "respuesta-corta-en-minusculas-sin-tildes"}
+    {"q": "¿Cuántos relojes hay?", "type": "text", "a": "tres"},
+    {"q": "Clica en el objeto fuera de lugar", "type": "click", "target": [55, 30, 14, 16], "label": "globo terráqueo"}
   ],
   "winText": "Cierre narrativo (1-2 frases) al completarlo"
 }
 
-Las preguntas pueden ser:
-- "¿Cuántos X hay?" (números)
-- "¿De qué color es Y?"
-- "¿Qué hay encima de Z?"
-- "¿Qué objeto aparece más cerca de la ventana?"
-Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preguntas en total. Dificultad: ${difficulty}.`;
+REGLAS:
+- ${N} preguntas en total
+- Mezcla tipos: ${difficulty === 'fácil' ? 'mitad text, mitad click' : difficulty === 'medio' ? '60% click, 40% text' : '70% click, 30% text'}
+- Para preguntas type "text": "a" es la respuesta exacta en minúsculas sin tildes
+- Para preguntas type "click": "target" es [x, y, w, h] en porcentajes (0-100) sobre la imagen — donde debe clicar la jugadora. "label" es el nombre del objeto para mostrar tras comprobar.
+- Las preguntas tipo click deben ser sobre objetos VISIBLES e IDENTIFICABLES en la posición target.
+- imagePrompt debe describir los objetos de las preguntas click en sus posiciones exactas.
+- Dificultad: ${difficulty}`;
 
       const data = await CC.chatJSON({
         system: sys,
@@ -101,9 +104,13 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
         temperature: 0.9,
       });
       if (!data.questions || !data.imagePrompt) throw new Error('Respuesta incompleta');
+      // Sanear preguntas — backward compat
+      data.questions = data.questions.map(q => ({
+        ...q,
+        type: q.type || (q.target ? 'click' : 'text'),
+      }));
       done();
       await loadFromCase(data);
-      // archivar (con imagen embebida si se generó)
       const saved = await CC.poolSave('visual', data, difficulty, data.title);
       if (saved?.id) { setPoolId(saved.id); CC.markPlayed('visual', saved.id); }
     } catch (e) {
@@ -112,15 +119,32 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
     }
   };
 
+  const onImageClick = (e) => {
+    if (activeQ == null || phase === 'won') return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    setClicks((c) => ({ ...c, [activeQ]: { x, y } }));
+    setActiveQ(null);
+  };
+
+  const allAnswered = () => {
+    if (!scenario) return false;
+    return scenario.questions.every((q, i) =>
+      q.type === 'click' ? !!clicks[i] : !!answers[i]
+    );
+  };
+
   const visionHint = async (qi) => {
     if (!image) return CC.toast('La imagen aún no está lista', 'bad');
     if (hintTexts[qi]) return;
     setHintBusy((b) => ({ ...b, [qi]: true }));
     try {
       const q = scenario.questions[qi];
+      const target = q.type === 'click' ? `Está aproximadamente en [${q.target.join(', ')}] (porcentajes x,y,w,h).` : `La respuesta correcta es "${q.a}".`;
       const text = await CC.chatVision({
         system: 'Eres un mentor que mira la imagen y guía con sutileza. NO digas directamente la respuesta. Da una pista de 1 frase que oriente al jugador.',
-        prompt: `Pregunta del puzzle: "${q.q}"\n\nLa respuesta correcta (no la reveles directamente) es: "${q.a}".\n\nDame una pista sutil basándote en lo que VES en la imagen, sin nombrar la respuesta exacta.`,
+        prompt: `Pregunta: "${q.q}"\n${target}\n\nDame una pista sutil basándote en lo que VES en la imagen, sin nombrar la respuesta exacta ni dar las coordenadas literales.`,
         images: [image],
       });
       setHintTexts((h) => ({ ...h, [qi]: text }));
@@ -133,7 +157,18 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
     const res = {};
     let correct = 0;
     scenario.questions.forEach((q, i) => {
-      const ok = norm(answers[i]) === norm(q.a) || (norm(answers[i]) && norm(q.a).split(/[,/]/).some(opt => norm(opt) === norm(answers[i])));
+      let ok = false;
+      if (q.type === 'click') {
+        const c = clicks[i];
+        if (c && Array.isArray(q.target)) {
+          const [tx, ty, tw, th] = q.target;
+          ok = c.x >= tx && c.x <= tx + tw && c.y >= ty && c.y <= ty + th;
+        }
+      } else {
+        const ans = norm(answers[i]);
+        const correctA = norm(q.a);
+        ok = ans === correctA || (ans && correctA.split(/[,/]/).some(opt => norm(opt) === ans));
+      }
       res[i] = ok;
       if (ok) correct++;
     });
@@ -157,7 +192,10 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
       <GameShell title="Habitación Visual" subtitle="Observa, cuenta, descubre" onExit={onExit}>
         <GameSetup
           gameId="visual"
-          intro={<p>Aparecerá una escena cargada de objetos. Tendrás unas preguntas sobre lo que se ve: contar cosas, encontrar detalles, identificar lo fuera de lugar.</p>}
+          intro={<>
+            <p>Aparecerá una escena cargada de objetos. Tendrás preguntas: contar, identificar colores, y <strong>clicar</strong> sobre objetos concretos.</p>
+            <p className="muted tiny">Las preguntas de click te dejarán marcar tu respuesta directamente sobre la imagen.</p>
+          </>}
           difficulty={difficulty}
           setDifficulty={setDifficulty}
           onStartNew={start}
@@ -181,10 +219,56 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
     <GameShell title={scenario.title} subtitle="Habitación Visual" onExit={onExit} difficulty={difficulty} timer={timer}>
       <Paper style={{ marginBottom: '1.5rem' }}><p style={{ fontStyle: 'italic', margin: 0 }}>{scenario.intro}</p></Paper>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '2rem' }}>
-        <Paper style={{ padding: '.5rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(320px, 1fr)', gap: '1.5rem' }}>
+        <Paper aged style={{ padding: '.5rem' }}>
           {image ? (
-            <img src={image} alt="La escena" style={{ width: '100%', display: 'block', border: '1px solid var(--paper-edge)' }} />
+            <div className="image-with-hotspots" style={{ width: '100%', cursor: activeQ != null ? 'crosshair' : 'default' }} onClick={onImageClick}>
+              <img src={image} alt="La escena" style={{ width: '100%', display: 'block', borderRadius: 2 }} />
+              {/* Markers for click answers */}
+              {Object.entries(clicks).map(([qi, pos]) => {
+                const isResult = results && scenario.questions[qi]?.type === 'click';
+                const correct = isResult && results[qi];
+                return (
+                  <div key={qi} style={{
+                    position: 'absolute',
+                    left: `${pos.x}%`, top: `${pos.y}%`,
+                    width: 28, height: 28,
+                    marginLeft: -14, marginTop: -14,
+                    borderRadius: '50%',
+                    background: isResult ? (correct ? 'var(--stamp-green)' : 'var(--stamp-red)') : 'var(--stamp-blue)',
+                    border: '2px solid var(--paper)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--paper)', fontFamily: 'Special Elite, monospace', fontSize: '.8rem',
+                    boxShadow: '0 2px 6px rgba(0,0,0,.4)',
+                    pointerEvents: 'none', zIndex: 5,
+                  }}>{Number(qi) + 1}</div>
+                );
+              })}
+              {/* Target rectangles after checking */}
+              {results && scenario.questions.map((q, i) => {
+                if (q.type !== 'click' || !Array.isArray(q.target)) return null;
+                const [x, y, w, h] = q.target;
+                return (
+                  <div key={'t-' + i} style={{
+                    position: 'absolute',
+                    left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%`,
+                    border: `2px dashed ${results[i] ? 'var(--stamp-green)' : 'var(--stamp-red)'}`,
+                    background: 'transparent',
+                    pointerEvents: 'none', zIndex: 4,
+                    borderRadius: 4,
+                  }}/>
+                );
+              })}
+              {activeQ != null && (
+                <div style={{
+                  position: 'absolute', top: 12, left: 12,
+                  background: 'var(--ink)', color: 'var(--paper)',
+                  padding: '.4rem .8rem',
+                  fontFamily: 'Special Elite, monospace', fontSize: '.75rem', letterSpacing: '.15em',
+                  borderRadius: 2, pointerEvents: 'none', zIndex: 10,
+                }}>📍 CLICA EN LA RESPUESTA · pregunta {activeQ + 1}</div>
+              )}
+            </div>
           ) : (
             <div style={{ aspectRatio: '1/1', background: 'var(--paper-3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Loader msg="revelando la imagen" />
@@ -195,36 +279,81 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
         <Paper>
           <h3 className="font-display">Preguntas</h3>
           <div className="col" style={{ gap: '.9rem' }}>
-            {scenario.questions.map((q, i) => (
-              <div key={i} style={{
-                padding: '.6rem',
-                background: results ? (results[i] ? 'rgba(60,120,60,.1)' : 'rgba(160,60,40,.1)') : 'transparent',
-                borderLeft: results ? `3px solid ${results[i] ? 'var(--stamp-green)' : 'var(--stamp-red)'}` : '3px solid transparent',
-              }}>
-                <label style={{ display: 'block' }}>{i + 1}. {q.q}</label>
-                <input
-                  type="text"
-                  value={answers[i] || ''}
-                  onChange={(e) => setAnswers({ ...answers, [i]: e.target.value })}
-                  disabled={phase === 'won' || results?.[i]}
-                />
-                {phase !== 'won' && !results?.[i] && !hintTexts[i] && CC.getSettings().hintsAllowed && (
-                  <button className="btn ghost small" onClick={() => visionHint(i)} disabled={hintBusy[i] || !image} style={{ marginTop: '.3rem', fontSize: '.65rem' }}>
-                    {hintBusy[i] ? '👁 mirando…' : '👁 pista visual'}
-                  </button>
-                )}
-                {hintTexts[i] && (
-                  <div className="tiny" style={{ marginTop: '.4rem', padding: '.4rem .6rem', background: 'rgba(180,140,80,.12)', borderLeft: '2px solid var(--stamp-blue)', fontStyle: 'italic' }}>
-                    👁 {hintTexts[i]}
-                  </div>
-                )}
-                {results && !results[i] && <div className="tiny muted" style={{ marginTop: '.2rem' }}>respuesta correcta: <em>{q.a}</em></div>}
-              </div>
-            ))}
+            {scenario.questions.map((q, i) => {
+              const isClick = q.type === 'click';
+              const isActive = activeQ === i;
+              const answered = isClick ? !!clicks[i] : !!answers[i];
+              const result = results?.[i];
+              return (
+                <div key={i} style={{
+                  padding: '.6rem .7rem',
+                  background: results ? (result ? 'rgba(60,120,60,.08)' : 'rgba(160,60,40,.08)') : isActive ? 'rgba(80,140,200,.1)' : 'transparent',
+                  borderLeft: `3px solid ${results ? (result ? 'var(--stamp-green)' : 'var(--stamp-red)') : isActive ? 'var(--stamp-blue)' : 'transparent'}`,
+                  transition: 'all .15s',
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '.3rem' }}>
+                    <span style={{
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      width: 20, height: 20, borderRadius: '50%',
+                      background: isClick ? 'var(--stamp-blue)' : 'var(--ink)', color: 'var(--paper)',
+                      fontSize: '.7rem', fontFamily: 'Special Elite, monospace',
+                      marginRight: '.2rem',
+                    }}>{i + 1}</span>
+                    {q.q}
+                    {isClick && <span className="pill" style={{ fontSize: '.6rem', padding: '.05rem .35rem' }}>click</span>}
+                  </label>
+
+                  {isClick ? (
+                    <div style={{ marginTop: '.4rem' }}>
+                      {answered ? (
+                        <div className="row gap-sm" style={{ alignItems: 'center' }}>
+                          <span className="tiny" style={{ color: 'var(--stamp-blue)' }}>📍 marca colocada</span>
+                          {!results?.[i] && (
+                            <button className="btn ghost small" onClick={() => setActiveQ(i)} disabled={phase === 'won'} style={{ padding: '.2rem .5rem', fontSize: '.65rem' }}>cambiar</button>
+                          )}
+                          {!result && !results && (
+                            <button className="btn ghost small" onClick={() => { setClicks(c => { const n = { ...c }; delete n[i]; return n; }); }} style={{ padding: '.2rem .5rem', fontSize: '.65rem' }}>borrar</button>
+                          )}
+                        </div>
+                      ) : (
+                        <button className="btn small" onClick={() => setActiveQ(isActive ? null : i)} disabled={phase === 'won' || !image} style={{ marginTop: '.2rem' }}>
+                          {isActive ? 'cancelar' : '📍 marcar en la imagen'}
+                        </button>
+                      )}
+                      {results && !result && q.label && (
+                        <div className="tiny muted" style={{ marginTop: '.3rem' }}>correcto: <em>{q.label}</em></div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type="text"
+                        value={answers[i] || ''}
+                        onChange={(e) => setAnswers({ ...answers, [i]: e.target.value })}
+                        disabled={phase === 'won' || result}
+                      />
+                      {results && !result && q.a && <div className="tiny muted" style={{ marginTop: '.2rem' }}>correcto: <em>{q.a}</em></div>}
+                    </>
+                  )}
+
+                  {phase !== 'won' && !result && !hintTexts[i] && CC.getSettings().hintsAllowed && (
+                    <button className="btn ghost small" onClick={() => visionHint(i)} disabled={hintBusy[i] || !image} style={{ marginTop: '.3rem', fontSize: '.65rem' }}>
+                      {hintBusy[i] ? '👁 mirando…' : '👁 pista visual'}
+                    </button>
+                  )}
+                  {hintTexts[i] && (
+                    <div className="tiny" style={{ marginTop: '.4rem', padding: '.4rem .6rem', background: 'rgba(180,140,80,.12)', borderLeft: '2px solid var(--stamp-blue)', fontStyle: 'italic' }}>
+                      👁 {hintTexts[i]}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           {phase !== 'won' && (
             <div style={{ marginTop: '1.2rem' }}>
-              <button className="btn red" onClick={check} disabled={!image || Object.keys(answers).length < scenario.questions.length}>Comprobar</button>
+              <button className="btn red" onClick={check} disabled={!image || !allAnswered()}>Comprobar</button>
+              {!allAnswered() && <div className="tiny muted" style={{ marginTop: '.4rem' }}>Faltan preguntas por responder</div>}
             </div>
           )}
           {phase === 'won' && (

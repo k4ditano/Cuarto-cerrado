@@ -157,6 +157,7 @@ Devuelve este JSON:
 {
   "title": "Título evocador (3-5 palabras)",
   "intro": "3-4 frases de mini-historia que sitúan al jugador antes de mostrar el mensaje cifrado.",
+  "theme": "${setting}",
   "plaintext": "el mensaje real en minusculas sin tildes ni puntuacion",
   "winText": "1-2 frases que cierran la escena al descifrarlo"
 }
@@ -235,7 +236,7 @@ IMPORTANTE: "plaintext" en minúsculas, SIN TILDES, sólo letras a-z y espacios.
 
   return (
     <GameShell title={story.title} subtitle="Cifrados" onExit={onExit} difficulty={difficulty} timer={timer}>
-      <Paper aged style={{ marginBottom: '1.5rem' }}><p style={{ fontStyle: 'italic', margin: 0 }}>{story.intro}</p></Paper>
+      <CaseBanner emoji="📜" title={story.title} theme={story.theme} subtitle={story.intro} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '2rem' }}>
         <Paper aged style={{ position: 'relative' }}>
