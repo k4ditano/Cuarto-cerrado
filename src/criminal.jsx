@@ -54,31 +54,40 @@ function CriminalGame({ opts = {}, onExit }) {
     startTs.current = Date.now();
     setPhase('playing');
 
-    // Generar escena del crimen si no está embebida
-    if (CC.config.hasOpenAI && data.sceneImagePrompt && !data._sceneImage) {
-      CC.image({ prompt: `${data.sceneImagePrompt}. Vintage detective crime scene photograph, sepia, dimly lit, film grain, no text.`, quality: 'low', size: '1024x1024' })
-        .then((img) => {
-          setSceneImage(img);
-          data._sceneImage = img;
-          if (poolIdInput) CC.poolUpdate('criminal', poolIdInput, data);
-        })
-        .catch((e) => console.warn('scene err', e));
-    }
+    // Generar escena + retratos en paralelo, un único poolUpdate al final
+    // para evitar race condition entre PUTs.
+    if (CC.config.hasOpenAI) {
+      const jobs = [];
 
-    // Retratos en segundo plano
-    if (CC.config.hasOpenAI && (!data._portraits || Object.keys(data._portraits).length < data.suspects.length)) {
-      const have = new Set(Object.keys(data._portraits || {}));
-      const todo = data.suspects.filter(s => s.portraitPrompt && !have.has(s.id));
-      Promise.all(todo.map(s =>
-        CC.image({ prompt: s.portraitPrompt, quality: 'low', size: '1024x1024' })
-          .then((url) => {
-            data._portraits = { ...(data._portraits || {}), [s.id]: url };
-            setPortraits((p) => ({ ...p, [s.id]: url }));
-          })
-          .catch((e) => console.warn('portrait err', s.id, e))
-      )).then(() => {
-        if (poolIdInput) CC.poolUpdate('criminal', poolIdInput, data);
-      });
+      if (data.sceneImagePrompt && !data._sceneImage) {
+        jobs.push(
+          CC.image({ prompt: `${data.sceneImagePrompt}. Vintage detective crime scene photograph, sepia, dimly lit, film grain, no text.`, quality: 'low', size: '1024x1024' })
+            .then((img) => {
+              setSceneImage(img);
+              data._sceneImage = img;
+            })
+            .catch((e) => console.warn('scene err', e))
+        );
+      }
+
+      if (!data._portraits || Object.keys(data._portraits).length < data.suspects.length) {
+        const have = new Set(Object.keys(data._portraits || {}));
+        const todo = data.suspects.filter(s => s.portraitPrompt && !have.has(s.id));
+        todo.forEach(s => {
+          jobs.push(
+            CC.image({ prompt: s.portraitPrompt, quality: 'low', size: '1024x1024' })
+              .then((url) => {
+                data._portraits = { ...(data._portraits || {}), [s.id]: url };
+                setPortraits((p) => ({ ...p, [s.id]: url }));
+              })
+              .catch((e) => console.warn('portrait err', s.id, e))
+          );
+        });
+      }
+
+      if (jobs.length > 0 && poolIdInput) {
+        Promise.all(jobs).then(() => CC.poolUpdate('criminal', poolIdInput, data));
+      }
     }
   };
 
