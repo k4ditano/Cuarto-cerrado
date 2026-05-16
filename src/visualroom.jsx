@@ -24,6 +24,7 @@ function VisualGame({ opts = {}, onExit }) {
   const [answers, setAnswers] = useState({});      // text answers {qIdx: str}
   const [clicks, setClicks] = useState({});        // click answers {qIdx: {x,y}}
   const [activeQ, setActiveQ] = useState(null);    // index of question being clicked
+  const [hoverQ, setHoverQ] = useState(null);      // index of marker being hovered (for tooltip)
   const [results, setResults] = useState(null);    // {qIdx: bool}
   const [hintTexts, setHintTexts] = useState({});
   const [hintBusy, setHintBusy] = useState({});
@@ -226,22 +227,54 @@ REGLAS:
               <img src={image} alt="La escena" style={{ width: '100%', display: 'block', borderRadius: 2 }} />
               {/* Markers for click answers */}
               {Object.entries(clicks).map(([qi, pos]) => {
+                const qIdx = Number(qi);
                 const isResult = results && scenario.questions[qi]?.type === 'click';
                 const correct = isResult && results[qi];
+                const q = scenario.questions[qi];
+                const tipText = q.q + (results && q.label ? ` · ${correct ? '✓' : '✗ era: ' + q.label}` : '');
+                const showTip = hoverQ === qIdx;
                 return (
-                  <div key={qi} style={{
-                    position: 'absolute',
-                    left: `${pos.x}%`, top: `${pos.y}%`,
-                    width: 28, height: 28,
-                    marginLeft: -14, marginTop: -14,
-                    borderRadius: '50%',
-                    background: isResult ? (correct ? 'var(--stamp-green)' : 'var(--stamp-red)') : 'var(--stamp-blue)',
-                    border: '2px solid var(--paper)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'var(--paper)', fontFamily: 'Special Elite, monospace', fontSize: '.8rem',
-                    boxShadow: '0 2px 6px rgba(0,0,0,.4)',
-                    pointerEvents: 'none', zIndex: 5,
-                  }}>{Number(qi) + 1}</div>
+                  <div key={qi}
+                    onMouseEnter={(e) => { e.stopPropagation(); setHoverQ(qIdx); }}
+                    onMouseLeave={() => setHoverQ(h => h === qIdx ? null : h)}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      position: 'absolute',
+                      left: `${pos.x}%`, top: `${pos.y}%`,
+                      width: 44, height: 44,
+                      marginLeft: -22, marginTop: -22,
+                      borderRadius: '50%',
+                      background: isResult ? (correct ? 'var(--stamp-green)' : 'var(--stamp-red)') : 'var(--stamp-blue)',
+                      border: '3px solid var(--paper)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: 'var(--paper)', fontFamily: 'Special Elite, monospace', fontSize: '1.25rem', fontWeight: 700,
+                      lineHeight: 1,
+                      boxShadow: '0 3px 10px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.3)',
+                      textShadow: '0 1px 2px rgba(0,0,0,.5)',
+                      cursor: 'help', zIndex: showTip ? 15 : 5,
+                    }}>
+                    {qIdx + 1}
+                    {showTip && (
+                      <div style={{
+                        position: 'absolute', bottom: 'calc(100% + 10px)', left: '50%', transform: 'translateX(-50%)',
+                        background: 'var(--ink)', color: 'var(--paper)',
+                        padding: '.55rem .85rem',
+                        fontFamily: 'Special Elite, monospace', fontSize: '1rem', fontWeight: 400, letterSpacing: '.02em',
+                        lineHeight: 1.35,
+                        borderRadius: 3, width: 'max-content', maxWidth: 320,
+                        boxShadow: '0 6px 18px rgba(0,0,0,.55)',
+                        pointerEvents: 'none', textShadow: 'none',
+                      }}>
+                        <span style={{ opacity: .7, marginRight: '.3rem' }}>{qIdx + 1}·</span>{tipText}
+                        <div style={{
+                          position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+                          width: 0, height: 0,
+                          borderLeft: '7px solid transparent', borderRight: '7px solid transparent',
+                          borderTop: '7px solid var(--ink)',
+                        }}></div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
               {/* Target rectangles after checking */}
@@ -252,10 +285,11 @@ REGLAS:
                   <div key={'t-' + i} style={{
                     position: 'absolute',
                     left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%`,
-                    border: `2px dashed ${results[i] ? 'var(--stamp-green)' : 'var(--stamp-red)'}`,
+                    border: `3px dashed ${results[i] ? 'var(--stamp-green)' : 'var(--stamp-red)'}`,
                     background: 'transparent',
                     pointerEvents: 'none', zIndex: 4,
                     borderRadius: 4,
+                    boxShadow: '0 0 0 1px rgba(0,0,0,.4)',
                   }}/>
                 );
               })}
@@ -263,9 +297,10 @@ REGLAS:
                 <div style={{
                   position: 'absolute', top: 12, left: 12,
                   background: 'var(--ink)', color: 'var(--paper)',
-                  padding: '.4rem .8rem',
-                  fontFamily: 'Special Elite, monospace', fontSize: '.75rem', letterSpacing: '.15em',
+                  padding: '.6rem 1rem',
+                  fontFamily: 'Special Elite, monospace', fontSize: '.95rem', letterSpacing: '.15em',
                   borderRadius: 2, pointerEvents: 'none', zIndex: 10,
+                  boxShadow: '0 4px 14px rgba(0,0,0,.5)',
                 }}>📍 CLICA EN LA RESPUESTA · pregunta {activeQ + 1}</div>
               )}
             </div>
