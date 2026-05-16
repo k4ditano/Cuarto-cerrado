@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cuarto Cerrado · Sociedad Enigmática</title>
+  <link rel="stylesheet" href="src/styles.css" />
+  <link rel="icon" href="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='44' fill='%23f0e6d2' stroke='%232a2520' stroke-width='4'/><text x='50' y='66' font-size='52' text-anchor='middle' fill='%238b2a1f' font-family='serif'>🔒</text></svg>" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- React + Babel -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <!-- Lib (vanilla JS) -->
+  <script src="src/lib.js"></script>
+
+  <!-- UI compartida -->
+  <script type="text/babel" src="src/ui.jsx" data-presets="react"></script>
+
+  <!-- Juegos -->
+  <script type="text/babel" src="src/mapdoku.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/escaperoom.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/criminal.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/visualroom.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/riddles.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/ciphers.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/anagrams.jsx" data-presets="react"></script>
+  <script type="text/babel" src="src/surprise.jsx" data-presets="react"></script>
+
+  <!-- App principal (al final, depende de todo lo de arriba) -->
+  <script type="text/babel" src="src/app.jsx" data-presets="react"></script>
+</body>
+</html>
