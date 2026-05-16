@@ -3,6 +3,22 @@
 // examinar → coger items → usar items → desbloquear contenido → encontrar
 // código → escapar.
 
+// Frases ambientales — narrador suelta una cada cierto rato para crear presión
+const ESCAPE_AMBIENT = [
+  'El reloj de pared sigue su tictac, indiferente.',
+  'Algo cruje en el techo. ¿La madera vieja, o pasos?',
+  'La luz parpadea un instante. Vuelve, pero más débil.',
+  'Te parece oler humo. Probablemente no es nada.',
+  'Una corriente helada te eriza la nuca.',
+  'En algún sitio gotea agua. No la habías oído antes.',
+  'Te das cuenta de que llevas un rato conteniendo la respiración.',
+  'El polvo en suspensión parece quieto. Demasiado quieto.',
+  'Crees oír una voz al otro lado de la puerta. Calla en cuanto te concentras.',
+  'La habitación parece más pequeña que cuando entraste.',
+  'Un libro se desliza solo de la estantería. Cae con un golpe seco.',
+  'El silencio se hace tan denso que duele.',
+];
+
 const ESCAPE_THEMES = [
   'el despacho de un anticuario',
   'el camarote de un capitán pirata',
@@ -29,6 +45,7 @@ function EscapeGame({ opts = {}, onExit }) {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState(null);
+  const [draggedItem, setDraggedItem] = useState(null);  // id of item being dragged from inventory
   const [timer, setTimer] = useState(0);
   const [hintsUsed, setHintsUsed] = useState(0);
   const [answer, setAnswer] = useState('');
@@ -43,6 +60,23 @@ function EscapeGame({ opts = {}, onExit }) {
     if (phase !== 'playing') return;
     const id = setInterval(() => setTimer(Math.floor((Date.now() - startTs.current) / 1000)), 1000);
     return () => clearInterval(id);
+  }, [phase]);
+
+  // Ambiental — cada 75-110s suelta una frase atmosférica
+  useEffect(() => {
+    if (phase !== 'playing') return;
+    let cancelled = false;
+    const fire = () => {
+      if (cancelled) return;
+      const line = CC.pick(ESCAPE_AMBIENT);
+      setChatLog((log) => [...log, { who: 'them', text: `« ${line} »`, ambient: true }]);
+    };
+    const next = () => 75000 + Math.floor(Math.random() * 35000);
+    let t = setTimeout(function loop() {
+      fire();
+      t = setTimeout(loop, next());
+    }, next());
+    return () => { cancelled = true; clearTimeout(t); };
   }, [phase]);
 
   const loadFromCase = (data, poolIdInput) => {
@@ -148,6 +182,18 @@ REGLAS:
   };
 
   // ─── Interacciones ──────────────────────────────────────────────────
+  // Asegura que un id de item tenga definición en room.items. Si la IA generó
+  // un givesItem sin entry correspondiente, sintetizamos una para que se vea
+  // en el inventario.
+  const ensureItemDef = (itemId) => {
+    if (!room || !itemId) return;
+    const existing = (room.items || []).find(it => it.id === itemId);
+    if (existing) return;
+    const niceName = itemId.split(/[-_\s]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    const synth = { id: itemId, name: niceName, icon: '📦', desc: 'Objeto recogido' };
+    setRoom((r) => ({ ...r, items: [...(r.items || []), synth] }));
+  };
+
   const examineObject = (obj) => {
     setSelectedObject(obj);
     // Primera vez: log + posible item
@@ -159,9 +205,12 @@ REGLAS:
         { who: 'them', text: obj.examineText },
       ]);
       if (obj.givesItem && !inventory.includes(obj.givesItem)) {
-        const item = room.items.find(it => it.id === obj.givesItem);
+        ensureItemDef(obj.givesItem);
+        const item = (room.items || []).find(it => it.id === obj.givesItem);
         setInventory((inv) => [...inv, obj.givesItem]);
-        if (item) CC.toast(`Cogiste: ${item.icon} ${item.name}`, 'ok', 2500);
+        const niceName = item?.name || obj.givesItem.split(/[-_\s]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        const icon = item?.icon || '📦';
+        CC.toast(`Cogiste: ${icon} ${niceName}`, 'ok', 2500);
       }
     }
   };
@@ -173,16 +222,19 @@ REGLAS:
     }
     if (objectStates[obj.id] === 'unlocked') return;
     setObjectStates((s) => ({ ...s, [obj.id]: 'unlocked' }));
-    const item = room.items.find(it => it.id === itemId);
+    const item = (room.items || []).find(it => it.id === itemId);
     setChatLog((log) => [
       ...log,
       { who: 'me', text: `Usar ${item?.name || 'item'} en ${obj.name}` },
       { who: 'them', text: obj.unlockedRevealText || '(algo cambia, pero no consigues distinguir qué)' },
     ]);
     if (obj.unlockedGivesItem && !inventory.includes(obj.unlockedGivesItem)) {
-      const newItem = room.items.find(it => it.id === obj.unlockedGivesItem);
+      ensureItemDef(obj.unlockedGivesItem);
+      const newItem = (room.items || []).find(it => it.id === obj.unlockedGivesItem);
       setInventory((inv) => [...inv, obj.unlockedGivesItem]);
-      if (newItem) CC.toast(`Cogiste: ${newItem.icon} ${newItem.name}`, 'ok', 2500);
+      const niceName = newItem?.name || obj.unlockedGivesItem.split(/[-_\s]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      const icon = newItem?.icon || '📦';
+      CC.toast(`Cogiste: ${icon} ${niceName}`, 'ok', 2500);
     }
   };
 
@@ -205,12 +257,15 @@ Objetos ya examinados: ${Object.keys(objectStates).join(', ') || 'ninguno'}
 Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
 
       const history = chatLog.slice(-8).map(m => ({ role: m.who === 'me' ? 'user' : 'assistant', content: m.text }));
+      const visionPrompt = history.length
+        ? `Conversación previa:\n${history.map(m => `${m.role === 'user' ? 'JUGADOR' : 'NARRADOR'}: ${m.content}`).join('\n')}\n\nJUGADOR: ${userMsg}`
+        : userMsg;
       let content;
       try {
         if (image) {
           content = await CC.chatVision({
             system: sys + '\n\nTIENES la imagen de la habitación adjunta. Cuando el jugador señale o pregunte por algo visible, descríbelo de forma fiel a la imagen.',
-            prompt: userMsg,
+            prompt: visionPrompt,
             images: [image],
             temperature: 0.7,
           });
@@ -239,6 +294,8 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
       CC.grantMedal('first-solve');
       if (duration < 600) CC.grantMedal('escape-fast');
       if (hintsUsed === 0) CC.grantMedal('no-hints');
+      const perfectBonus = (hintsUsed === 0 ? 200 : 0) + (duration < 600 ? 150 : 0);
+      CC.addScore(CC.calcScore({ difficulty, duration, hints: hintsUsed, perfectBonus }));
       CC.toast('¡Escapaste!', 'ok');
     } else {
       CC.toast('Esa no es la combinación.', 'bad');
@@ -284,7 +341,9 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
       difficulty={difficulty}
       timer={timer}
       right={phase !== 'won' && (
-        <div className="row gap-sm">
+        <div className="row gap-sm wrap">
+          <span className="pill" title="Objetos examinados / total">🔎 {Object.keys(objectStates).length}/{(room.objects || []).length}</span>
+          {inventory.length > 0 && <span className="pill" title="Items en inventario">🎒 {inventory.length}</span>}
           <button className="btn ghost small" onClick={() => setNarratorOpen(o => !o)}>
             {narratorOpen ? '✕ Cerrar narrador' : '💬 Narrador'}
           </button>
@@ -307,11 +366,40 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
                   const examined = !!state;
                   const unlocked = state === 'unlocked';
                   const locked = obj.requiresItem && !unlocked;
+                  const isDragging = !!draggedItem;
+                  const isDropTarget = isDragging && locked;
+                  const isValidDrop = isDropTarget && draggedItem === obj.requiresItem;
+                  // Feedback visual también para objetos no-locked durante drag (rojo: no encaja)
+                  const isInvalidDrop = isDragging && !locked;
                   return (
                     <div key={obj.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`${obj.name}${unlocked ? ', desbloqueado' : examined ? ', examinado' : ''}${locked ? ', requiere objeto' : ''}`}
                       className={`hotspot ${examined ? 'examined' : ''}`}
-                      style={{ left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%` }}
-                      onClick={() => examineObject(obj)}>
+                      style={{
+                        left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%`,
+                        ...(isDropTarget ? {
+                          outline: `3px dashed ${isValidDrop ? 'var(--stamp-green)' : 'var(--stamp-blue)'}`,
+                          outlineOffset: 2,
+                          background: isValidDrop ? 'rgba(80,160,80,.18)' : 'rgba(80,140,200,.12)',
+                        } : isInvalidDrop ? {
+                          outline: '2px dashed rgba(140,140,140,.5)',
+                          outlineOffset: 2,
+                        } : null),
+                      }}
+                      onClick={() => examineObject(obj)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); examineObject(obj); } }}
+                      onDragOver={(e) => { if (draggedItem) { e.preventDefault(); e.dataTransfer.dropEffect = locked ? 'move' : 'none'; } }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const itemId = e.dataTransfer.getData('text/plain') || draggedItem;
+                        setDraggedItem(null);
+                        if (!itemId) return;
+                        if (!locked) { CC.toast('Aquí no hace falta nada.', '', 1500); return; }
+                        if (!objectStates[obj.id]) examineObject(obj);
+                        useItemOn(obj, itemId);
+                      }}>
                       <div className="pin" style={locked ? { background: 'oklch(0.45 0.12 60)' } : (unlocked ? { background: 'var(--stamp-green)' } : undefined)}>
                         {unlocked ? '✓' : locked ? '🔒' : (i + 1)}
                       </div>
@@ -330,7 +418,13 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
             </div>
           </Paper>
 
-          <InventoryBar items={inventory} itemDefs={room.items || []} />
+          <InventoryBar
+            items={inventory}
+            itemDefs={room.items || []}
+            draggedItem={draggedItem}
+            onDragStart={(id) => setDraggedItem(id)}
+            onDragEnd={() => setDraggedItem(null)}
+          />
 
           {/* Cerradura final — bajo el inventario, prominente */}
           <Paper aged>
@@ -340,8 +434,15 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
             </div>
             {phase === 'won' ? (
               <div style={{ textAlign: 'center', padding: '1rem 0' }}>
-                <p style={{ fontStyle: 'italic' }}>{room.winText}</p>
+                {(() => {
+                  const tier = timer < 300 && hintsUsed === 0 ? { label: 'ESCAPE LEGENDARIO', kind: '' }
+                              : timer < 600 && hintsUsed <= 1 ? { label: 'ESCAPE MAESTRO', kind: 'green' }
+                              : { label: 'ESCAPASTE', kind: 'blue' };
+                  return <Stamp kind={tier.kind} solid className="entrance" style={{ fontSize: '1rem', padding: '.5rem 1.2rem' }}>{tier.label}</Stamp>;
+                })()}
+                <p style={{ fontStyle: 'italic', marginTop: '.8rem' }}>{room.winText}</p>
                 <div className="muted tiny">Resuelto en {CC.fmtTime(timer)} · {hintsUsed} pista{hintsUsed === 1 ? '' : 's'}</div>
+                <ScoreReveal difficulty={difficulty} duration={timer} hints={hintsUsed} perfectBonus={(hintsUsed === 0 ? 200 : 0) + (timer < 600 ? 150 : 0)} extraNote={timer < 600 ? '⚡ escapada veloz' : null} />
                 <Leaderboard gameId="escape" caseId={poolId} />
                 <ShareBar gameId="escape" poolId={poolId} caseData={room} title={room.title} difficulty={difficulty} />
                 <button className="btn" style={{ marginTop: '1rem' }} onClick={() => { setPhase('setup'); setRoom(null); setPoolId(null); }}>Otra escape room</button>
@@ -368,7 +469,11 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
               {image && <Stamp kind="blue" style={{ fontSize: '.55rem', padding: '.1rem .35rem' }}>👁 con visión</Stamp>}
             </div>
             <div className="chat-log" style={{ maxHeight: '52vh' }}>
-              {chatLog.map((m, i) => (<div key={i} className={`bubble ${m.who}`}>{m.text}</div>))}
+              {chatLog.map((m, i) => (
+                <div key={i} className={`bubble ${m.who}`} style={m.ambient ? { fontStyle: 'italic', opacity: .7, borderLeft: '2px solid var(--ink-faded)', background: 'transparent' } : undefined}>
+                  {m.text}
+                </div>
+              ))}
               {busy && <div className="bubble them"><Loader msg="escribiendo" /></div>}
             </div>
             <form onSubmit={(e) => { e.preventDefault(); askGM(input); }} style={{ marginTop: '.8rem' }}>
@@ -397,7 +502,7 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})`;
 }
 
 // ─── Inventario ────────────────────────────────────────────────────────
-function InventoryBar({ items, itemDefs }) {
+function InventoryBar({ items, itemDefs, draggedItem, onDragStart, onDragEnd }) {
   return (
     <Paper style={{ padding: '.8rem 1rem' }}>
       <div className="row gap-sm" style={{ alignItems: 'center' }}>
@@ -405,17 +510,38 @@ function InventoryBar({ items, itemDefs }) {
         <div className="row gap-sm wrap" style={{ flex: 1 }}>
           {items.length === 0 && <span className="muted tiny" style={{ fontStyle: 'italic' }}>(vacío — examina objetos para coger items)</span>}
           {items.map((id) => {
-            const it = itemDefs.find(d => d.id === id);
-            if (!it) return null;
+            const found = itemDefs.find(d => d.id === id);
+            const it = found || {
+              id,
+              name: id.split(/[-_\s]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+              icon: '📦',
+              desc: 'Objeto recogido',
+            };
+            const dragging = draggedItem === id;
             return (
-              <div key={id} className="paper" style={{
-                padding: '.4rem .7rem',
-                background: 'var(--paper-2)',
-                border: '1px solid var(--paper-edge)',
-                display: 'flex', alignItems: 'center', gap: '.5rem',
-              }} title={it.desc}>
-                <span style={{ fontSize: '1.4rem', lineHeight: 1 }}>{it.icon || '📦'}</span>
-                <div>
+              <div key={id}
+                draggable={!!onDragStart}
+                onDragStart={(e) => {
+                  if (!onDragStart) return;
+                  e.dataTransfer.setData('text/plain', id);
+                  e.dataTransfer.effectAllowed = 'move';
+                  onDragStart(id);
+                }}
+                onDragEnd={() => onDragEnd && onDragEnd()}
+                title={(it.desc || '') + ' — Arrástralo al objeto cerrado de la imagen para usarlo'}
+                style={{
+                  padding: '.4rem .7rem',
+                  background: 'var(--paper-2)',
+                  border: `1px solid ${dragging ? 'var(--stamp-blue)' : 'var(--paper-edge)'}`,
+                  display: 'flex', alignItems: 'center', gap: '.5rem',
+                  cursor: 'grab',
+                  opacity: dragging ? 0.45 : 1,
+                  boxShadow: dragging ? '0 0 0 2px var(--stamp-blue)' : 'none',
+                  transition: 'opacity .12s, box-shadow .12s, border-color .12s',
+                  userSelect: 'none',
+                }}>
+                <span style={{ fontSize: '1.4rem', lineHeight: 1, pointerEvents: 'none' }}>{it.icon || '📦'}</span>
+                <div style={{ pointerEvents: 'none' }}>
                   <div className="font-typewriter" style={{ fontSize: '.8rem', letterSpacing: '.05em' }}>{it.name}</div>
                   <div className="tiny muted" style={{ marginTop: -2 }}>{it.desc}</div>
                 </div>
@@ -424,6 +550,11 @@ function InventoryBar({ items, itemDefs }) {
           })}
         </div>
       </div>
+      {items.length > 0 && (
+        <div className="tiny muted" style={{ marginTop: '.5rem', fontStyle: 'italic' }}>
+          ✋ Arrastra un item sobre el objeto cerrado de la imagen para usarlo (o pulsa el objeto y elígelo en el modal).
+        </div>
+      )}
     </Paper>
   );
 }
@@ -432,9 +563,11 @@ function InventoryBar({ items, itemDefs }) {
 function ExamineModal({ obj, room, inventory, state, onClose, onUseItem }) {
   const unlocked = state === 'unlocked';
   const hasRequired = obj.requiresItem && inventory.includes(obj.requiresItem);
-  const requiredItem = obj.requiresItem ? room.items.find(it => it.id === obj.requiresItem) : null;
-  const giveItem = obj.givesItem ? room.items.find(it => it.id === obj.givesItem) : null;
-  const unlockedGiveItem = obj.unlockedGivesItem ? room.items.find(it => it.id === obj.unlockedGivesItem) : null;
+  const synthItem = (id) => id ? { id, name: id.split(/[-_\s]+/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), icon: '📦', desc: 'Objeto' } : null;
+  const lookupItem = (id) => id ? ((room.items || []).find(it => it.id === id) || synthItem(id)) : null;
+  const requiredItem = lookupItem(obj.requiresItem);
+  const giveItem = lookupItem(obj.givesItem);
+  const unlockedGiveItem = lookupItem(obj.unlockedGivesItem);
 
   return (
     <Modal onClose={onClose} title={obj.name}>
@@ -482,7 +615,7 @@ function ExamineModal({ obj, room, inventory, state, onClose, onUseItem }) {
               <div className="tiny muted">Probar con algo del inventario:</div>
               <div className="row gap-sm wrap" style={{ marginTop: '.4rem' }}>
                 {inventory.map(itemId => {
-                  const it = room.items.find(i => i.id === itemId);
+                  const it = lookupItem(itemId);
                   if (!it) return null;
                   return (
                     <button key={itemId} className="btn ghost small" onClick={() => onUseItem(itemId)} title={it.desc}>

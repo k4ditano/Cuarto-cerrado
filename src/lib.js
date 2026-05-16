@@ -104,8 +104,51 @@ CC.addHistory = (entry) => {
   const list = CC.getHistory();
   list.unshift({ ...entry, ts: Date.now(), id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}` });
   localStorage.setItem(HIST_KEY, JSON.stringify(list.slice(0, 200)));
+  CC.updateStreak(entry.won);
 };
-CC.clearHistory = () => localStorage.removeItem(HIST_KEY);
+CC.clearHistory = () => { localStorage.removeItem(HIST_KEY); localStorage.removeItem(STREAK_KEY); };
+
+// ─── Streak (rachas de victorias) ──────────────────────────────────────
+const STREAK_KEY = 'cc.streak';
+CC.getStreak = () => {
+  try { return JSON.parse(localStorage.getItem(STREAK_KEY) || '{"current":0,"best":0,"lastWonTs":0}'); }
+  catch { return { current: 0, best: 0, lastWonTs: 0 }; }
+};
+CC.updateStreak = (won) => {
+  const s = CC.getStreak();
+  if (won) {
+    s.current = (s.current || 0) + 1;
+    s.best = Math.max(s.best || 0, s.current);
+    s.lastWonTs = Date.now();
+    if (s.current >= 3) CC.grantMedal('streak-3');
+    if (s.current >= 7) CC.grantMedal('streak-7');
+  } else {
+    s.current = 0;
+  }
+  localStorage.setItem(STREAK_KEY, JSON.stringify(s));
+  return s;
+};
+
+// ─── Score acumulado por victoria (tiempo + dificultad + pistas) ───────
+const SCORE_KEY = 'cc.score';
+CC.getScore = () => {
+  try { return JSON.parse(localStorage.getItem(SCORE_KEY) || '0'); }
+  catch { return 0; }
+};
+CC.addScore = (points) => {
+  const n = (CC.getScore() || 0) + Math.max(0, Math.round(points || 0));
+  localStorage.setItem(SCORE_KEY, JSON.stringify(n));
+  return n;
+};
+// Cálculo común: base por dificultad, bonus por velocidad y pistas evitadas
+CC.calcScore = ({ difficulty = 'medio', duration = 0, hints = 0, perfectBonus = 0 } = {}) => {
+  const base = difficulty === 'difícil' ? 300 : difficulty === 'medio' ? 200 : 120;
+  const speedBonus = Math.max(0, 400 - Math.min(duration, 400)); // hasta +400 si <60s
+  const hintPenalty = (hints || 0) * 25;
+  const streak = CC.getStreak().current || 0;
+  const streakMult = 1 + Math.min(streak, 10) * 0.1; // hasta 2x con racha 10
+  return Math.round((base + speedBonus + perfectBonus - hintPenalty) * streakMult);
+};
 
 CC.getMedals = () => {
   try { return JSON.parse(localStorage.getItem(MEDALS_KEY) || '{}'); }

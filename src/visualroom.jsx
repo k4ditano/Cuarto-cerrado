@@ -16,7 +16,9 @@ const VISUAL_SCENES = [
 ];
 
 function VisualGame({ opts = {}, onExit }) {
+  // phases: setup, loading, observe (memorizar imagen), playing, won
   const [phase, setPhase] = useState(opts.caseData ? 'loading' : 'setup');
+  const [observeLeft, setObserveLeft] = useState(0); // segundos restantes en observación
   const [difficulty, setDifficulty] = useState(opts.difficulty || 'medio');
   const [scenario, setScenario] = useState(null);
   const [poolId, setPoolId] = useState(null);
@@ -49,7 +51,8 @@ function VisualGame({ opts = {}, onExit }) {
     const existingImage = preImage || data._image || null;
     setImage(existingImage);
     startTs.current = Date.now();
-    if (existingImage) { setPhase('playing'); return; }
+    const observeSecs = difficulty === 'fácil' ? 90 : difficulty === 'medio' ? 60 : 40;
+    if (existingImage) { setObserveLeft(observeSecs); setPhase('observe'); return; }
     if (CC.config.hasOpenAI) {
       push('Pintando la escena (gpt-image-1, low)');
       try {
@@ -63,8 +66,17 @@ function VisualGame({ opts = {}, onExit }) {
     push('Enmarcando y colgando en la pared');
     await new Promise(r => setTimeout(r, 300));
     done();
-    setPhase('playing');
+    setObserveLeft(observeSecs);
+    setPhase('observe');
   };
+
+  // Cuenta regresiva en fase observación
+  useEffect(() => {
+    if (phase !== 'observe') return;
+    if (observeLeft <= 0) { setPhase('playing'); startTs.current = Date.now(); return; }
+    const id = setTimeout(() => setObserveLeft(s => s - 1), 1000);
+    return () => clearTimeout(id);
+  }, [phase, observeLeft]);
 
   const start = async () => {
     setPhase('loading'); setError(null); reset();
@@ -142,7 +154,9 @@ REGLAS:
     setHintBusy((b) => ({ ...b, [qi]: true }));
     try {
       const q = scenario.questions[qi];
-      const target = q.type === 'click' ? `Está aproximadamente en [${q.target.join(', ')}] (porcentajes x,y,w,h).` : `La respuesta correcta es "${q.a}".`;
+      const target = q.type === 'click'
+        ? `Está aproximadamente en [${(Array.isArray(q.target) ? q.target : []).join(', ')}] (porcentajes x,y,w,h).`
+        : `La respuesta correcta es "${q.a}".`;
       const text = await CC.chatVision({
         system: 'Eres un mentor que mira la imagen y guía con sutileza. NO digas directamente la respuesta. Da una pista de 1 frase que oriente al jugador.',
         prompt: `Pregunta: "${q.q}"\n${target}\n\nDame una pista sutil basándote en lo que VES en la imagen, sin nombrar la respuesta exacta ni dar las coordenadas literales.`,
@@ -182,6 +196,8 @@ REGLAS:
       CC.recordPlay('visual', poolId, { duration, hints: 0, won: true });
       CC.grantMedal('first-solve');
       CC.grantMedal('visual');
+      const perfectBonus = correct === scenario.questions.length ? 300 : Math.round(pct * 150);
+      CC.addScore(CC.calcScore({ difficulty, duration, hints: Object.keys(hintTexts).length, perfectBonus }));
       CC.toast(`${correct}/${scenario.questions.length} aciertos`, 'ok');
     } else {
       CC.toast(`Sólo ${correct}/${scenario.questions.length}. Sigue mirando.`, 'bad', 3500);
@@ -214,6 +230,33 @@ REGLAS:
     return <GameShell title="Habitación Visual" onExit={onExit}>
       <LiveLoader feed={feed} title="Pintando la habitación" idle={['Componiendo la escena', 'Repartiendo objetos', 'Pintando sombras']} />
     </GameShell>;
+  }
+
+  if (phase === 'observe') {
+    return (
+      <GameShell title={scenario.title} subtitle="Memoriza la escena" onExit={onExit} difficulty={difficulty}>
+        <Paper style={{ marginBottom: '1rem', textAlign: 'center', background: 'oklch(0.85 0.07 60)' }}>
+          <div className="font-typewriter" style={{ letterSpacing: '.18em' }}>👁 OBSERVA · MEMORIZA</div>
+          <div className="tiny muted" style={{ marginTop: '.3rem' }}>
+            En {observeLeft}s aparecerán las preguntas. Cuando estés lista, pulsa el botón.
+          </div>
+        </Paper>
+        <Paper aged style={{ padding: '.5rem' }}>
+          {image ? (
+            <img src={image} alt={scenario.title} style={{ width: '100%', display: 'block', borderRadius: 2 }} />
+          ) : (
+            <div style={{ aspectRatio: '1/1', background: 'var(--paper-3)' }} className="center">
+              <Loader msg="revelando la escena" />
+            </div>
+          )}
+        </Paper>
+        <div className="center" style={{ marginTop: '1rem' }}>
+          <button className="btn red observe-cta" onClick={() => { setPhase('playing'); startTs.current = Date.now(); }}>
+            🧠 Estoy lista — ver preguntas
+          </button>
+        </div>
+      </GameShell>
+    );
   }
 
   return (
@@ -395,6 +438,7 @@ REGLAS:
             <div style={{ marginTop: '1rem', textAlign: 'center' }}>
               <Stamp solid>RESUELTO</Stamp>
               <p style={{ marginTop: '.8rem', fontStyle: 'italic' }}>{scenario.winText}</p>
+              <ScoreReveal difficulty={difficulty} duration={timer} hints={Object.keys(hintTexts).length} perfectBonus={results && Object.values(results).every(Boolean) ? 300 : 100} extraNote={results && Object.values(results).every(Boolean) ? '👁 mirada perfecta' : null} />
               <Leaderboard gameId="visual" caseId={poolId} />
               <ShareBar gameId="visual" poolId={poolId} caseData={scenario} title={scenario.title} difficulty={difficulty} />
               <button className="btn" onClick={() => { setPhase('setup'); setScenario(null); setPoolId(null); }}>Otra escena</button>

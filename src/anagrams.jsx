@@ -17,6 +17,11 @@ const ANAGRAM_THEMES = [
 ];
 
 function shuffleWord(word) {
+  if (word.length < 2) return word;
+  if (word.length === 2) {
+    // Sólo 2 perms; si idénticas, intercambia
+    return word[1] + word[0] === word ? word : word[1] + word[0];
+  }
   const arr = [...word];
   let attempts = 0;
   do {
@@ -25,7 +30,11 @@ function shuffleWord(word) {
       [arr[i], arr[j]] = [arr[j], arr[i]];
     }
     attempts++;
-  } while (arr.join('') === word && attempts < 8 && word.length > 2);
+  } while (arr.join('') === word && attempts < 12);
+  if (arr.join('') === word) {
+    // Forzar al menos un swap distinto
+    [arr[0], arr[1]] = [arr[1], arr[0]];
+  }
   return arr.join('');
 }
 
@@ -37,6 +46,9 @@ function AnagramsGame({ opts = {}, onExit }) {
   const [current, setCurrent] = useState(0);
   const [solved, setSolved] = useState([]);
   const [answer, setAnswer] = useState('');
+  const [tilePicks, setTilePicks] = useState([]); // array de índices de scrambled usados
+  const [wordStartTs, setWordStartTs] = useState(0);
+  const [bonusPoints, setBonusPoints] = useState(0);
   const [hintsShown, setHintsShown] = useState({});
   const [timer, setTimer] = useState(0);
   const [error, setError] = useState(null);
@@ -54,6 +66,7 @@ function AnagramsGame({ opts = {}, onExit }) {
   const loadFromCase = (data, poolIdInput) => {
     setGame(data); setPoolId(poolIdInput || null);
     setCurrent(0); setSolved([]); setAnswer(''); setHintsShown({}); setTimer(0);
+    setTilePicks([]); setBonusPoints(0); setWordStartTs(Date.now());
     startTs.current = Date.now();
     setPhase('playing');
   };
@@ -114,23 +127,45 @@ IMPORTANTE: las iniciales de "words" en orden DEBEN formar exactamente "finalWor
     }
   };
 
+  const buildAnswerFromTiles = (picks) => picks.map(i => game.words[current].scrambled[i]).join('');
+
+  const onTileClick = (idx) => {
+    if (tilePicks.includes(idx)) return;
+    const next = [...tilePicks, idx];
+    setTilePicks(next);
+    setAnswer(buildAnswerFromTiles(next));
+  };
+  const onSlotClick = (slotPos) => {
+    const next = tilePicks.filter((_, i) => i !== slotPos);
+    setTilePicks(next);
+    setAnswer(buildAnswerFromTiles(next));
+  };
+  const clearTiles = () => { setTilePicks([]); setAnswer(''); };
+
   const tryAnswer = () => {
     const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
     const w = game.words[current];
     if (norm(answer) === norm(w.a)) {
       const ns = [...solved, current];
       setSolved(ns);
-      setAnswer('');
-      CC.toast('Correcto', 'ok', 1200);
-      if (current + 1 < game.words.length) setCurrent(current + 1);
+      // Bonus por velocidad por palabra: hasta +100 si <8s
+      const t = Math.floor((Date.now() - wordStartTs) / 1000);
+      const wordBonus = Math.max(0, 100 - Math.min(t * 8, 100));
+      setBonusPoints(b => b + wordBonus);
+      setAnswer(''); setTilePicks([]);
+      CC.toast(wordBonus > 60 ? `\u00a1Rapid\u00edsimo! +${wordBonus} bonus` : 'Correcto', 'ok', 1400);
+      if (current + 1 < game.words.length) { setCurrent(current + 1); setWordStartTs(Date.now()); }
       else {
         setPhase('won');
         const duration = Math.floor((Date.now() - startTs.current) / 1000);
+        const hints = Object.keys(hintsShown).length;
         CC.addHistory({ gameId: 'anagrams', won: true, difficulty, duration, summary: game.title });
-        CC.recordPlay('anagrams', poolId, { duration, hints: Object.keys(hintsShown).length, won: true });
+        CC.recordPlay('anagrams', poolId, { duration, hints, won: true });
         CC.grantMedal('first-solve');
         CC.grantMedal('riddler');
-        if (Object.keys(hintsShown).length === 0) CC.grantMedal('no-hints');
+        if (hints === 0) CC.grantMedal('no-hints');
+        const perfectBonus = (hints === 0 ? 200 : 0) + bonusPoints;
+        CC.addScore(CC.calcScore({ difficulty, duration, hints, perfectBonus }));
       }
     } else {
       CC.toast('No, prueba a reordenar.', 'bad', 1500);
@@ -173,6 +208,7 @@ IMPORTANTE: las iniciales de "words" en orden DEBEN formar exactamente "finalWor
               <h2 className="font-display" style={{ marginTop: '1rem' }}>Palabra final</h2>
               <div className="glyph-box" style={{ fontFamily: 'IM Fell English, serif', fontSize: '1.6rem' }}>{game.finalWord}</div>
               <p style={{ marginTop: '1rem', fontStyle: 'italic' }}>{game.winText}</p>
+              <ScoreReveal difficulty={difficulty} duration={timer} hints={Object.keys(hintsShown).length} perfectBonus={Object.keys(hintsShown).length === 0 ? 200 : 0} />
               <Leaderboard gameId="anagrams" caseId={poolId} />
               <ShareBar gameId="anagrams" poolId={poolId} caseData={game} title={game.title} difficulty={difficulty} />
               <button className="btn" onClick={() => { setPhase('setup'); setGame(null); setPoolId(null); }}>Otra ronda</button>
@@ -182,27 +218,50 @@ IMPORTANTE: las iniciales de "words" en orden DEBEN formar exactamente "finalWor
               <div className="font-typewriter tiny" style={{ letterSpacing: '.2em', color: 'var(--ink-faded)' }}>
                 PALABRA {current + 1} / {game.words.length} · TEMA: {game.theme.toUpperCase()}
               </div>
-              <div className="glyph-box" style={{ marginTop: '1rem', fontFamily: 'Special Elite, monospace', fontSize: '2.2rem', letterSpacing: '.4em', textTransform: 'uppercase' }}>
-                {game.words[current].scrambled}
-              </div>
-              <div className="tiny muted" style={{ textAlign: 'center', marginTop: '.4rem' }}>{game.words[current].a.length} letras</div>
+              <div className="tiny muted" style={{ textAlign: 'center', marginTop: '.4rem' }}>{game.words[current].a.length} letras · pulsa las fichas para construir la palabra</div>
 
-              <form onSubmit={(e) => { e.preventDefault(); tryAnswer(); }} style={{ marginTop: '1.2rem' }}>
-                <div className="row gap-sm">
-                  <input value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="La palabra real…" autoFocus />
-                  <button className="btn red" disabled={!answer.trim()}>Responder</button>
-                </div>
-              </form>
+              {/* Slots de respuesta */}
+              <div className="row gap-sm" style={{ justifyContent: 'center', marginTop: '1.2rem', flexWrap: 'wrap' }}>
+                {Array.from({ length: game.words[current].a.length }).map((_, slot) => {
+                  const filled = slot < tilePicks.length;
+                  const letter = filled ? game.words[current].scrambled[tilePicks[slot]].toUpperCase() : '';
+                  return (
+                    <button key={slot}
+                      className={`letter-tile slot ${filled ? 'filled' : ''}`}
+                      onClick={() => filled && onSlotClick(slot)}
+                      title={filled ? 'Quitar letra' : ''}>
+                      {letter || '·'}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Banco de letras */}
+              <div className="row gap-sm" style={{ justifyContent: 'center', marginTop: '1.2rem', flexWrap: 'wrap' }}>
+                {[...game.words[current].scrambled].map((ch, i) => (
+                  <button key={i}
+                    className="letter-tile"
+                    onClick={() => onTileClick(i)}
+                    disabled={tilePicks.includes(i)}>
+                    {ch.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+
+              <div className="row gap-sm" style={{ justifyContent: 'center', marginTop: '1rem' }}>
+                <button className="btn ghost small" onClick={clearTiles} disabled={tilePicks.length === 0}>↺ borrar</button>
+                <button className="btn red" onClick={tryAnswer} disabled={tilePicks.length !== game.words[current].a.length}>Responder</button>
+              </div>
               {hintsShown[current] && (
                 <div className="tiny" style={{ marginTop: '.8rem', padding: '.6rem', background: 'rgba(180,80,40,.08)', borderLeft: '3px solid var(--stamp-red)' }}>
                   <strong>Pista:</strong> {game.words[current].hint} <span className="muted">· empieza por <strong>{game.words[current].a[0]}</strong></span>
                 </div>
               )}
-              <div className="row" style={{ marginTop: '.8rem', justifyContent: 'space-between' }}>
+              <div className="row" style={{ marginTop: '.8rem', justifyContent: 'space-between', alignItems: 'center' }}>
                 <button className="btn ghost small" onClick={() => setHintsShown({ ...hintsShown, [current]: true })} disabled={hintsShown[current] || !CC.getSettings().hintsAllowed}>
                   Mostrar pista
                 </button>
-                <span className="tiny muted">{solved.length} resueltas · {Object.keys(hintsShown).length} pistas</span>
+                <span className="tiny muted">{solved.length} resueltas · {Object.keys(hintsShown).length} pistas {bonusPoints > 0 && `· bonus ${bonusPoints}pt`}</span>
               </div>
             </>
           )}

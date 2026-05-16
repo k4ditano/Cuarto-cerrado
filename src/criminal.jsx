@@ -33,6 +33,7 @@ function CriminalGame({ opts = {}, onExit }) {
   const [accusations, setAccusations] = useState(0);
   const [error, setError] = useState(null);
   const [evidencePicker, setEvidencePicker] = useState(null); // {suspect, onPick} when presenting
+  const [accusePrompt, setAccusePrompt] = useState(null); // {suspect}
   const startTs = useRef(0);
   const { feed, push, done, reset } = useStatusFeed();
 
@@ -237,20 +238,37 @@ Responde en primera persona, 1-3 frases, tono propio del personaje. NUNCA confie
   };
 
   // ─── Acusar ──────────────────────────────────────────────────────────
-  const accuse = (suspect) => {
-    if (!confirm(`¿Acusar a ${suspect.name} del asesinato? Si fallas, contará en tu expediente.`)) return;
-    setAccusations(a => a + 1);
+  const MAX_ACCUSATIONS = difficulty === 'difícil' ? 1 : difficulty === 'medio' ? 2 : 3;
+
+  const openAccuse = (suspect) => setAccusePrompt({ suspect, keyEvId: null });
+  const closeAccuse = () => setAccusePrompt(null);
+
+  const accuse = (suspect, keyEvId) => {
+    setAccusePrompt(null);
+    const newAccs = accusations + 1;
+    setAccusations(newAccs);
     if (suspect.isCulprit) {
       setPhase('won');
       const duration = Math.floor((Date.now() - startTs.current) / 1000);
+      const keyEv = caseFile.evidence.find(e => e.id === keyEvId);
+      const namedKeyRight = keyEv?.significance === 'alta';
       CC.addHistory({ gameId: 'criminal', won: true, difficulty, duration, summary: `${caseFile.title} — acusaste a ${suspect.name}` });
       CC.recordPlay('criminal', poolId, { duration, hints: accusations, won: true });
       CC.grantMedal('first-solve');
       CC.grantMedal('detective');
       if (accusations === 0) CC.grantMedal('detective-perfect');
-      CC.toast('¡Resuelto!', 'ok');
+      const perfectBonus = (accusations === 0 ? 250 : 0) + (namedKeyRight ? 150 : 0);
+      CC.addScore(CC.calcScore({ difficulty, duration, hints: accusations, perfectBonus }));
+      CC.toast(namedKeyRight ? '¡Resuelto con la prueba clave!' : '¡Resuelto!', 'ok');
     } else {
-      CC.toast(`${suspect.name} era inocente.`, 'bad', 3500);
+      if (newAccs >= MAX_ACCUSATIONS) {
+        setPhase('lost');
+        const duration = Math.floor((Date.now() - startTs.current) / 1000);
+        CC.addHistory({ gameId: 'criminal', won: false, difficulty, duration, summary: `${caseFile.title} — culpable se escapó` });
+        CC.toast('Sin más oportunidades. El verdadero culpable se ha esfumado.', 'bad', 5000);
+      } else {
+        CC.toast(`${suspect.name} era inocente. Te quedan ${MAX_ACCUSATIONS - newAccs} oportunidad${MAX_ACCUSATIONS - newAccs === 1 ? '' : 'es'}.`, 'bad', 4500);
+      }
     }
   };
 
@@ -298,7 +316,12 @@ Responde en primera persona, 1-3 frases, tono propio del personaje. NUNCA confie
       onExit={onExit}
       difficulty={difficulty}
       timer={timer}
-      right={accusations > 0 && <span className="pill red">acusaciones fallidas · {accusations}</span>}
+      right={
+        <div className="row gap-sm">
+          <span className="pill" title="Evidencias recogidas">🔍 {collectedEvidence.length}/{caseFile.evidence.length}</span>
+          {accusations > 0 && <span className="pill" style={{ background: 'var(--stamp-red)', color: 'var(--paper)' }}>⚠ acusaciones {accusations}/{MAX_ACCUSATIONS}</span>}
+        </div>
+      }
     >
       <div className="row gap-sm wrap" style={{ marginBottom: '1.5rem' }}>
         {tabs.map(([k, label]) => (
@@ -322,8 +345,8 @@ Responde en primera persona, 1-3 frases, tono propio del personaje. NUNCA confie
       )}
       {activeView === 'accuse' && (
         <AccusePanel
-          suspects={caseFile.suspects} portraits={portraits} onAccuse={accuse}
-          phase={phase} caseFile={caseFile} accusations={accusations} timer={timer}
+          suspects={caseFile.suspects} portraits={portraits} onAccuse={openAccuse}
+          phase={phase} caseFile={caseFile} accusations={accusations} timer={timer} maxAccusations={MAX_ACCUSATIONS}
           onReplay={() => { setPhase('setup'); setCaseFile(null); setPoolId(null); setSceneImage(null); }}
           poolId={poolId} difficulty={difficulty}
         />
@@ -347,7 +370,70 @@ Responde en primera persona, 1-3 frases, tono propio del personaje. NUNCA confie
       {examinedEvidence && (
         <EvidenceModal ev={examinedEvidence} onClose={() => setExaminedEvidence(null)} />
       )}
+
+      {accusePrompt && (
+        <AccuseModal
+          suspect={accusePrompt.suspect}
+          collectedEvidence={collectedEvidence}
+          caseFile={caseFile}
+          accusations={accusations}
+          maxAccusations={MAX_ACCUSATIONS}
+          onCancel={closeAccuse}
+          onConfirm={(keyEvId) => accuse(accusePrompt.suspect, keyEvId)}
+        />
+      )}
     </GameShell>
+  );
+}
+
+// ─── Modal de acusación con elección de prueba clave ───────────────────
+function AccuseModal({ suspect, collectedEvidence, caseFile, accusations, maxAccusations, onCancel, onConfirm }) {
+  const [keyEvId, setKeyEvId] = useState(null);
+  const evList = caseFile.evidence.filter(e => collectedEvidence.includes(e.id));
+  const remaining = maxAccusations - accusations;
+  return (
+    <Modal onClose={onCancel} title={`Acusar a ${suspect.name}`}>
+      <div className="font-typewriter tiny" style={{ letterSpacing: '.2em', color: 'var(--ink-faded)' }}>FORMALIZAR ACUSACIÓN</div>
+      <p className="muted" style={{ marginTop: '.4rem' }}>
+        Una acusación falsa marca tu expediente. Te quedan <strong>{remaining}</strong> oportunidad{remaining === 1 ? '' : 'es'} en total.
+      </p>
+      <div className="paper aged" style={{ padding: '.9rem 1.1rem', marginTop: '.8rem' }}>
+        <div className="row gap-sm" style={{ alignItems: 'center' }}>
+          <div style={{ fontSize: 26 }}>👤</div>
+          <div>
+            <div className="font-display">{suspect.name}</div>
+            <div className="tiny muted">{suspect.role}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{ marginTop: '1rem' }}>
+        <label>¿Cuál es la prueba clave que lo delata?</label>
+        <div className="tiny muted" style={{ marginBottom: '.5rem' }}>Si aciertas, bonificación extra. Si no la tienes recogida, puedes saltarte el paso.</div>
+        <div className="col gap-sm" style={{ maxHeight: '38vh', overflowY: 'auto' }}>
+          {evList.length === 0 && <p className="muted tiny">No has recogido evidencias todavía.</p>}
+          {evList.map(ev => (
+            <button key={ev.id}
+              onClick={() => setKeyEvId(keyEvId === ev.id ? null : ev.id)}
+              className="paper"
+              style={{
+                padding: '.6rem .8rem', textAlign: 'left',
+                background: keyEvId === ev.id ? 'rgba(180,80,40,.18)' : 'var(--paper-2)',
+                border: `2px solid ${keyEvId === ev.id ? 'var(--stamp-red)' : 'var(--paper-edge)'}`,
+                cursor: 'pointer',
+              }}>
+              <div className="font-typewriter" style={{ fontSize: '.85rem' }}>{ev.name}</div>
+              <div className="tiny muted">{ev.shortDesc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="row gap-sm" style={{ marginTop: '1.2rem', justifyContent: 'flex-end' }}>
+        <button className="btn ghost" onClick={onCancel}>Cancelar</button>
+        <button className="btn red" onClick={() => onConfirm(keyEvId)}>
+          {keyEvId ? 'Acusar con prueba' : 'Acusar sin prueba clave'}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
@@ -382,9 +468,13 @@ function CrimeSceneView({ caseFile, sceneImage, collectedEvidence, onExamine }) 
               const collected = collectedEvidence.includes(ev.id);
               return (
                 <div key={ev.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Evidencia ${ev.name}${collected ? ', recogida' : ''}`}
                   className={`hotspot ${collected ? 'examined' : ''}`}
                   style={{ left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%` }}
-                  onClick={() => onExamine(ev)}>
+                  onClick={() => onExamine(ev)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onExamine(ev); } }}>
                   <div className="pin">{collected ? '✓' : i + 1}</div>
                   <div className="label">{ev.name}{collected ? ' · recogido' : ''}</div>
                 </div>
@@ -591,7 +681,21 @@ function InterrogationView({ suspect, portrait, history, collectedEvidence, case
 }
 
 // ─── Panel de acusación + cierre ───────────────────────────────────────
-function AccusePanel({ suspects, portraits, onAccuse, phase, caseFile, accusations, timer, onReplay, poolId, difficulty }) {
+function AccusePanel({ suspects, portraits, onAccuse, phase, caseFile, accusations, timer, maxAccusations = 99, onReplay, poolId, difficulty }) {
+  if (phase === 'lost') {
+    const culprit = suspects.find(s => s.isCulprit);
+    return (
+      <Paper aged style={{ maxWidth: 760 }}>
+        <div className="center" style={{ flexDirection: 'column', textAlign: 'center', padding: '1rem' }}>
+          <Stamp kind="red" solid className="entrance" style={{ fontSize: '1rem', padding: '.5rem 1.2rem' }}>CASO ARCHIVADO SIN RESOLVER</Stamp>
+          <h2 className="font-display" style={{ marginTop: '1rem' }}>El verdadero culpable era {culprit.name}</h2>
+          <p style={{ maxWidth: 560 }}>{caseFile.culpritExplanation}</p>
+          <div className="muted tiny" style={{ marginTop: '.6rem' }}>{accusations} acusación{accusations === 1 ? '' : 'es'} fallida{accusations === 1 ? '' : 's'} · agotaste tus oportunidades</div>
+          <button className="btn" style={{ marginTop: '1.5rem' }} onClick={onReplay}>Otro caso</button>
+        </div>
+      </Paper>
+    );
+  }
   if (phase === 'won') {
     const culprit = suspects.find(s => s.isCulprit);
     return (
@@ -601,6 +705,7 @@ function AccusePanel({ suspects, portraits, onAccuse, phase, caseFile, accusatio
           <h2 className="font-display" style={{ marginTop: '1rem' }}>{culprit.name} era culpable</h2>
           <p style={{ maxWidth: 560 }}>{caseFile.culpritExplanation}</p>
           <div className="muted tiny" style={{ marginTop: '.6rem' }}>Resuelto en {CC.fmtTime(timer)} con {accusations} acusación{accusations === 1 ? '' : 'es'} fallida{accusations === 1 ? '' : 's'}</div>
+          <ScoreReveal difficulty={difficulty} duration={timer} hints={accusations} perfectBonus={accusations === 0 ? 250 : 0} extraNote={accusations === 0 ? '🔍 acusación perfecta' : null} />
           <Leaderboard gameId="criminal" caseId={poolId} />
           <ShareBar gameId="criminal" poolId={poolId} caseData={caseFile} title={caseFile.title} difficulty={difficulty} />
           <button className="btn" style={{ marginTop: '1.5rem' }} onClick={onReplay}>Otro caso</button>
@@ -608,10 +713,11 @@ function AccusePanel({ suspects, portraits, onAccuse, phase, caseFile, accusatio
       </Paper>
     );
   }
+  const remaining = maxAccusations - accusations;
   return (
     <div>
       <Paper style={{ marginBottom: '1.5rem' }}>
-        <p>Cuando estés segura, elige a quién acusar. Si fallas, el caso sigue abierto pero quedará registrado.</p>
+        <p>Cuando estés segura, elige a quién acusar. Tienes <strong>{remaining}</strong> oportunidad{remaining === 1 ? '' : 'es'} restante{remaining === 1 ? '' : 's'}. Si las agotas, el caso se archiva.</p>
       </Paper>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1.5rem' }}>
         {suspects.map((s) => (

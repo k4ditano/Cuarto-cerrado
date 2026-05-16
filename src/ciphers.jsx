@@ -111,6 +111,7 @@ function CiphersGame({ opts = {}, onExit }) {
   const [difficulty, setDifficulty] = useState(opts.difficulty || 'medio');
   const [scheme, setScheme] = useState(null); // {type, key, encoded, story}
   const [story, setStory] = useState(null);
+  const [poolId, setPoolId] = useState(null);
   const [guess, setGuess] = useState('');
   const [hintLevel, setHintLevel] = useState(0); // 0 nothing, 1 cipher type, 2 explanation, 3 first letters
   const [timer, setTimer] = useState(0);
@@ -128,8 +129,9 @@ function CiphersGame({ opts = {}, onExit }) {
     return () => clearInterval(id);
   }, [phase]);
 
-  const loadFromCase = (data) => {
+  const loadFromCase = (data, poolIdInput) => {
     setStory(data.story); setScheme(data.scheme);
+    setPoolId(poolIdInput || null);
     setGuess(''); setHintLevel(0); setTimer(0);
     startTs.current = Date.now();
     setPhase('playing');
@@ -181,8 +183,10 @@ IMPORTANTE: "plaintext" en minúsculas, SIN TILDES, sólo letras a-z y espacios.
       await new Promise(r => setTimeout(r, 300));
       done();
 
-      loadFromCase({ story: data, scheme: { type, key, encoded } });
-      CC.poolSave('ciphers', { story: data, scheme: { type, key, encoded } }, difficulty, data.title).then((r) => { if (r?.id) CC.markPlayed('ciphers', r.id); });
+      const payload = { story: data, scheme: { type, key, encoded } };
+      const saved = await CC.poolSave('ciphers', payload, difficulty, data.title);
+      if (saved?.id) CC.markPlayed('ciphers', saved.id);
+      loadFromCase(payload, saved?.id);
     } catch (e) {
       setError(e.message);
       setPhase('setup');
@@ -199,9 +203,18 @@ IMPORTANTE: "plaintext" en minúsculas, SIN TILDES, sólo letras a-z y espacios.
       CC.grantMedal('first-solve');
       CC.grantMedal('cipher');
       if (hintLevel === 0) CC.grantMedal('no-hints');
+      const perfectBonus = hintLevel === 0 ? 250 : 0;
+      CC.addScore(CC.calcScore({ difficulty, duration, hints: hintLevel, perfectBonus }));
       CC.toast('¡Descifrado!', 'ok');
     } else {
-      CC.toast('No es exactamente eso. Mira los símbolos.', 'bad');
+      // Pista útil: qué % de letras coinciden por posición
+      const g = norm(guess);
+      const target = norm(story.plaintext);
+      let matches = 0;
+      const minLen = Math.min(g.length, target.length);
+      for (let i = 0; i < minLen; i++) if (g[i] === target[i]) matches++;
+      const pct = target.length ? Math.round((matches / target.length) * 100) : 0;
+      CC.toast(`No exactamente. ${matches}/${target.length} letras en su sitio (${pct}%).`, 'bad', 3000);
     }
   };
 
@@ -262,6 +275,7 @@ IMPORTANTE: "plaintext" en minúsculas, SIN TILDES, sólo letras a-z y espacios.
                 {story.plaintext}
               </div>
               <p style={{ marginTop: '1rem', fontStyle: 'italic' }}>{story.winText}</p>
+              <ScoreReveal difficulty={difficulty} duration={timer} hints={hintLevel} perfectBonus={hintLevel === 0 ? 250 : 0} extraNote={hintLevel === 0 ? '🔐 sin pistas' : null} />
               <Leaderboard gameId="ciphers" caseId={poolId} />
               <ShareBar gameId="ciphers" poolId={poolId} caseData={{ story, scheme }} title={story.title} difficulty={difficulty} />
               <button className="btn" onClick={() => { setPhase('setup'); setStory(null); setScheme(null); setPoolId(null); }}>Otro mensaje</button>
@@ -280,10 +294,15 @@ IMPORTANTE: "plaintext" en minúsculas, SIN TILDES, sólo letras a-z y espacios.
             <HintLayer
               level={2} current={hintLevel} setLevel={setHintLevel}
               title="¿Cómo funciona?"
-              reveal={cipher.desc + ' ' + cipher.hint(scheme.key)}
+              reveal={cipher.desc}
             />
             <HintLayer
               level={3} current={hintLevel} setLevel={setHintLevel}
+              title="El parámetro clave"
+              reveal={cipher.hint(scheme.key)}
+            />
+            <HintLayer
+              level={4} current={hintLevel} setLevel={setHintLevel}
               title="Las primeras 3 letras"
               reveal={story.plaintext.slice(0, 3) + '…'}
             />
@@ -291,9 +310,102 @@ IMPORTANTE: "plaintext" en minúsculas, SIN TILDES, sólo letras a-z y espacios.
           <div className="tiny muted" style={{ marginTop: '1rem' }}>
             Cada pista que reveles cuenta para la medalla de "sin ayuda".
           </div>
+
+          <CryptToolbox encoded={scheme.encoded} type={scheme.type} />
         </Paper>
       </div>
     </GameShell>
+  );
+}
+
+// ─── Caja de herramientas criptoanalíticas ─────────────────────────────
+const SPANISH_FREQ = 'EAOSNRILDTCUMPÑBGVYQHFZJKWX'; // orden aproximado
+function CryptToolbox({ encoded, type }) {
+  const [open, setOpen] = useState(false);
+  const [tool, setTool] = useState('freq'); // freq | brute
+
+  const freqRows = useMemo(() => {
+    const counts = {};
+    let total = 0;
+    [...(encoded || '').toUpperCase()].forEach(c => {
+      if (c >= 'A' && c <= 'Z') { counts[c] = (counts[c] || 0) + 1; total++; }
+    });
+    return Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([letter, n]) => ({ letter, n, pct: total ? Math.round((n / total) * 100) : 0 }));
+  }, [encoded]);
+
+  const bruteRows = useMemo(() => {
+    if (type !== 'cesar' && type !== 'atbash') return [];
+    const out = [];
+    for (let k = 1; k < 26; k++) {
+      const decoded = (encoded || '').replace(/[a-zA-Z]/g, (ch) => {
+        const upper = ch === ch.toUpperCase();
+        const c = ch.toLowerCase();
+        const i = c.charCodeAt(0) - 97;
+        const e = String.fromCharCode(((i - k + 26) % 26) + 97);
+        return upper ? e.toUpperCase() : e;
+      });
+      out.push({ shift: k, decoded });
+    }
+    return out;
+  }, [encoded, type]);
+
+  if (!open) {
+    return (
+      <button className="btn ghost small" onClick={() => setOpen(true)} style={{ marginTop: '1rem' }}>
+        🔬 Abrir herramientas de criptoanálisis
+      </button>
+    );
+  }
+
+  return (
+    <div className="paper" style={{ marginTop: '1rem', padding: '.8rem 1rem', background: 'var(--paper-2)' }}>
+      <div className="between" style={{ marginBottom: '.5rem' }}>
+        <div className="font-typewriter tiny" style={{ letterSpacing: '.18em' }}>🔬 CRIPTOANÁLISIS</div>
+        <button className="btn ghost small" onClick={() => setOpen(false)} style={{ padding: '.1rem .4rem', fontSize: '.65rem' }}>cerrar</button>
+      </div>
+      <div className="row gap-sm" style={{ marginBottom: '.6rem' }}>
+        <button className={`navlink ${tool === 'freq' ? 'active' : ''}`} onClick={() => setTool('freq')}>📊 Frecuencias</button>
+        {(type === 'cesar' || type === 'atbash') && (
+          <button className={`navlink ${tool === 'brute' ? 'active' : ''}`} onClick={() => setTool('brute')}>🔄 Fuerza bruta</button>
+        )}
+      </div>
+
+      {tool === 'freq' && (
+        <div>
+          <div className="tiny muted" style={{ marginBottom: '.4rem' }}>
+            En español: <span className="font-mono">{SPANISH_FREQ.slice(0, 10).split('').join(' ')}</span> son las más comunes.
+          </div>
+          <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+            {freqRows.length === 0 && <div className="tiny muted">No hay letras analizables.</div>}
+            {freqRows.map(({ letter, n, pct }) => (
+              <div key={letter} className="row gap-sm" style={{ alignItems: 'center', marginBottom: 2 }}>
+                <span className="font-mono" style={{ width: 18 }}>{letter}</span>
+                <div style={{ flex: 1, background: 'var(--paper-3)', borderRadius: 2, height: 12, position: 'relative' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: 'var(--stamp-blue)', borderRadius: 2 }}></div>
+                </div>
+                <span className="tiny muted" style={{ minWidth: 50, textAlign: 'right' }}>{n} · {pct}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tool === 'brute' && (
+        <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+          <div className="tiny muted" style={{ marginBottom: '.4rem' }}>
+            Probando todos los desplazamientos. Busca el que parezca español.
+          </div>
+          {bruteRows.map(({ shift, decoded }) => (
+            <div key={shift} style={{ padding: '.3rem .4rem', borderBottom: '1px dashed var(--paper-edge)' }}>
+              <span className="font-typewriter tiny" style={{ marginRight: '.4rem', color: 'var(--ink-faded)' }}>−{shift}:</span>
+              <span className="font-mono tiny">{decoded.slice(0, 80)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -17,9 +17,11 @@ function RiddlesGame({ opts = {}, onExit }) {
   const [phase, setPhase] = useState(opts.caseData ? 'loading' : 'setup');
   const [difficulty, setDifficulty] = useState(opts.difficulty || 'medio');
   const [chain, setChain] = useState(null); // {title, intro, riddles:[{q,a,hint}], finalPhrase, winText}
+  const [poolId, setPoolId] = useState(null);
   const [current, setCurrent] = useState(0);
   const [solved, setSolved] = useState([]); // indices solved
   const [answer, setAnswer] = useState('');
+  const [wrongAttempts, setWrongAttempts] = useState({}); // {idx: count}
   const [hintsShown, setHintsShown] = useState({});
   const [timer, setTimer] = useState(0);
   const [error, setError] = useState(null);
@@ -36,8 +38,9 @@ function RiddlesGame({ opts = {}, onExit }) {
     return () => clearInterval(id);
   }, [phase]);
 
-  const loadFromCase = (data) => {
-    setChain(data); setCurrent(0); setSolved([]); setHintsShown({}); setAnswer(''); setTimer(0);
+  const loadFromCase = (data, poolIdInput) => {
+    setChain(data); setPoolId(poolIdInput || null);
+    setCurrent(0); setSolved([]); setHintsShown({}); setAnswer(''); setTimer(0); setWrongAttempts({});
     startTs.current = Date.now();
     setPhase('playing');
   };
@@ -80,8 +83,9 @@ IMPORTANTE: la concatenación de la primera letra de cada respuesta DEBE formar 
       push('Escondiendo la frase secreta en las iniciales');
       await new Promise(r => setTimeout(r, 350));
       done();
-      loadFromCase(data);
-      CC.poolSave('riddles', data, difficulty, data.title).then((r) => { if (r?.id) CC.markPlayed('riddles', r.id); });
+      const saved = await CC.poolSave('riddles', data, difficulty, data.title);
+      if (saved?.id) CC.markPlayed('riddles', saved.id);
+      loadFromCase(data, saved?.id);
     } catch (e) {
       setError(e.message);
       setPhase('setup');
@@ -102,15 +106,33 @@ IMPORTANTE: la concatenación de la primera letra de cada respuesta DEBE formar 
         // Cadena completa
         setPhase('won');
         const duration = Math.floor((Date.now() - startTs.current) / 1000);
+        const hints = Object.keys(hintsShown).length;
         CC.addHistory({ gameId: 'riddles', won: true, difficulty, duration, summary: chain.title });
-        CC.recordPlay('riddles', poolId, { duration, hints: Object.keys(hintsShown).length, won: true });
+        CC.recordPlay('riddles', poolId, { duration, hints, won: true });
         CC.grantMedal('first-solve');
         CC.grantMedal('riddler');
-        if (Object.keys(hintsShown).length === 0) CC.grantMedal('no-hints');
+        if (hints === 0) CC.grantMedal('no-hints');
+        const perfectBonus = hints === 0 ? 200 : 0;
+        CC.addScore(CC.calcScore({ difficulty, duration, hints, perfectBonus }));
       }
     } else {
-      CC.toast('No es eso. Sigue pensando.', 'bad', 1800);
+      const next = (wrongAttempts[current] || 0) + 1;
+      setWrongAttempts({ ...wrongAttempts, [current]: next });
+      // Pista progresiva: 2 fallos → 1 letra, 4 → 2, 6 → mitad
+      const nLetters = next >= 6 ? Math.ceil(r.a.length / 2) : next >= 4 ? 2 : next >= 2 ? 1 : 0;
+      if (nLetters > 0) {
+        CC.toast(`Empieza por "${r.a.slice(0, nLetters)}…"`, 'bad', 2200);
+      } else {
+        CC.toast('No es eso. Sigue pensando.', 'bad', 1800);
+      }
     }
+  };
+
+  const revealedLetters = (idx) => {
+    const r = chain?.riddles?.[idx];
+    if (!r) return 0;
+    const w = wrongAttempts[idx] || 0;
+    return w >= 6 ? Math.ceil(r.a.length / 2) : w >= 4 ? 2 : w >= 2 ? 1 : 0;
   };
 
   if (phase === 'setup') {
@@ -145,14 +167,16 @@ IMPORTANTE: la concatenación de la primera letra de cada respuesta DEBE formar 
         <Paper aged>
           {phase === 'won' ? (
             <div style={{ textAlign: 'center', padding: '1rem' }}>
-              <Stamp solid style={{ fontSize: '1rem' }}>CADENA COMPLETA</Stamp>
+              <Stamp solid className="entrance" style={{ fontSize: '1rem' }}>CADENA COMPLETA</Stamp>
               <h2 className="font-display" style={{ marginTop: '1rem' }}>Frase secreta</h2>
               <div className="glyph-box" style={{ fontFamily: 'IM Fell English, serif', fontSize: '1.6rem', letterSpacing: '.05em' }}>
                 {chain.finalPhrase}
               </div>
               <p style={{ marginTop: '1rem', fontStyle: 'italic' }}>{chain.winText}</p>
-              <ShareBar gameId="riddles" caseData={chain} title={chain.title} />
-              <button className="btn" onClick={() => { setPhase('setup'); setChain(null); }}>Otra cadena</button>
+              <ScoreReveal difficulty={difficulty} duration={timer} hints={Object.keys(hintsShown).length} perfectBonus={Object.keys(hintsShown).length === 0 ? 200 : 0} />
+              <Leaderboard gameId="riddles" caseId={poolId} />
+              <ShareBar gameId="riddles" poolId={poolId} caseData={chain} title={chain.title} difficulty={difficulty} />
+              <button className="btn" onClick={() => { setPhase('setup'); setChain(null); setPoolId(null); }}>Otra cadena</button>
             </div>
           ) : (
             <>
@@ -162,6 +186,19 @@ IMPORTANTE: la concatenación de la primera letra de cada respuesta DEBE formar 
               <div className="glyph-box" style={{ marginTop: '1rem', fontFamily: 'IM Fell English, serif', fontSize: '1.25rem', fontStyle: 'italic' }}>
                 {chain.riddles[current].q}
               </div>
+              {(() => {
+                const r = chain.riddles[current];
+                const n = revealedLetters(current);
+                if (!n) return null;
+                return (
+                  <div className="font-mono" style={{ marginTop: '.8rem', textAlign: 'center', letterSpacing: '.4em', fontSize: '1.1rem' }}>
+                    {r.a.slice(0, n).toUpperCase()}{'·'.repeat(r.a.length - n)}
+                    <span className="tiny muted" style={{ marginLeft: '.6rem', letterSpacing: 'normal' }}>
+                      · {n}/{r.a.length} letra{n === 1 ? '' : 's'} reveladas
+                    </span>
+                  </div>
+                );
+              })()}
               <form onSubmit={(e) => { e.preventDefault(); tryAnswer(); }} style={{ marginTop: '1.2rem' }}>
                 <div className="row gap-sm">
                   <input value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="Tu respuesta…" autoFocus />

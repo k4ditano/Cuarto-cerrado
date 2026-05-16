@@ -2,18 +2,22 @@
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 // ─── Paper card ────────────────────────────────────────────────────────
-function Paper({ className = '', children, aged = true, style }) {
+function Paper({ className = '', children, aged = true, style, onClick, ...rest }) {
   return (
-    <div className={`paper ${aged ? 'aged' : ''} ${className}`} style={style}>
+    <div
+      className={`paper ${aged ? 'aged' : ''} ${className}`}
+      style={onClick ? { cursor: 'pointer', ...style } : style}
+      onClick={onClick}
+      {...rest}>
       {children}
     </div>
   );
 }
 
 // ─── Stamp ─────────────────────────────────────────────────────────────
-function Stamp({ children, kind = '', style = {}, solid = false }) {
+function Stamp({ children, kind = '', style = {}, solid = false, className = '' }) {
   return (
-    <span className={`stamp ${kind} ${solid ? 'solid' : ''}`} style={style}>{children}</span>
+    <span className={`stamp ${kind} ${solid ? 'solid' : ''} ${className}`} style={style}>{children}</span>
   );
 }
 
@@ -143,17 +147,18 @@ function LiveLoader({ feed = [], title = 'Generando expediente', idle = ['Mecano
 }
 
 function Typewriter({ text, speed = 28 }) {
-  const [shown, setShown] = useState(0);
-  useEffect(() => { setShown(0); }, [text]);
-  useEffect(() => {
-    if (shown >= text.length) return;
-    const t = setTimeout(() => setShown(shown + 1), speed);
-    return () => clearTimeout(t);
-  }, [shown, text, speed]);
+  // CSS-only para evitar re-renders por carácter
+  const len = (text || '').length;
+  const ms = Math.max(200, len * speed);
   return (
-    <span>
-      {text.slice(0, shown)}
-      <span style={{ borderRight: '2px solid var(--ink)', marginLeft: 1, opacity: shown < text.length ? 1 : 0, animation: 'caret .6s steps(1) infinite' }}>&nbsp;</span>
+    <span
+      key={text}
+      className="cc-typewriter"
+      style={{
+        '--tw-width': `${len}ch`,
+        animation: `ccTypewriterFill ${ms}ms steps(${Math.max(1, len)}, end) forwards, ccTypewriterCaret .6s steps(1) infinite`,
+      }}>
+      {text}
     </span>
   );
 }
@@ -502,6 +507,40 @@ function PoolBrowser({ gameId, onClose, onPick }) {
   );
 }
 
+// ─── ScoreReveal: animación de puntuación con desglose ────────────────
+function ScoreReveal({ difficulty, duration, hints, perfectBonus = 0, label = 'Puntuación', extraNote }) {
+  const [shown, setShown] = useState(0);
+  const score = useMemo(() => CC.calcScore({ difficulty, duration, hints, perfectBonus }), [difficulty, duration, hints, perfectBonus]);
+  const streak = CC.getStreak();
+  useEffect(() => {
+    let raf, start;
+    const dur = 900;
+    const step = (t) => {
+      if (!start) start = t;
+      const p = Math.min(1, (t - start) / dur);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setShown(Math.round(score * eased));
+      if (p < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [score]);
+  return (
+    <div className="paper" style={{ marginTop: '1rem', padding: '1.2rem', textAlign: 'center', background: 'linear-gradient(135deg, rgba(255,250,200,.45), rgba(255,235,180,.3))' }}>
+      <div className="font-typewriter tiny" style={{ letterSpacing: '.2em', color: 'var(--ink-faded)' }}>{label.toUpperCase()}</div>
+      <div className="font-display" style={{ fontSize: '2.4rem', marginTop: '.3rem', letterSpacing: '.05em' }}>
+        +{shown.toLocaleString('es-ES')} <span style={{ fontSize: '.9rem', color: 'var(--ink-faded)' }}>pts</span>
+      </div>
+      <div className="tiny muted" style={{ marginTop: '.4rem' }}>
+        base {difficulty} · {CC.fmtTime(duration)} · {hints} pista{hints === 1 ? '' : 's'}
+        {perfectBonus > 0 && ` · perfecto +${perfectBonus}`}
+        {streak.current > 1 && ` · racha ×${(1 + Math.min(streak.current, 10) * 0.1).toFixed(1)}`}
+      </div>
+      {extraNote && <div className="tiny" style={{ marginTop: '.3rem', fontStyle: 'italic' }}>{extraNote}</div>}
+    </div>
+  );
+}
+
 // ─── CaseBanner: cabecera decorativa con tema ──────────────────────────
 function CaseBanner({ emoji, title, theme, subtitle }) {
   // Hash del título para color estable por caso
@@ -540,4 +579,4 @@ function CaseBanner({ emoji, title, theme, subtitle }) {
 }
 
 // Export al window para uso global
-Object.assign(window, { Paper, Stamp, Topbar, Loader, BigLoader, LiveLoader, useStatusFeed, Typewriter, Modal, GameShell, DifficultyPicker, APIStatus, ShareBar, Leaderboard, GameSetup, ModeCard, PoolBrowser, CaseBanner });
+Object.assign(window, { Paper, Stamp, Topbar, Loader, BigLoader, LiveLoader, useStatusFeed, Typewriter, Modal, GameShell, DifficultyPicker, APIStatus, ShareBar, Leaderboard, GameSetup, ModeCard, PoolBrowser, CaseBanner, ScoreReveal });

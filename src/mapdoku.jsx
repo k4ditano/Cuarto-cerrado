@@ -22,6 +22,8 @@ function MapdokuGame({ opts = {}, onExit }) {
   const [revealed, setRevealed] = useState([]); // clue indices revealed via hint
   const [timer, setTimer] = useState(0);
   const [hintsUsed, setHintsUsed] = useState(0);
+  const [wrongCells, setWrongCells] = useState({}); // {posIdx-catName: true} para celdas erróneas tras check
+  const [checkCount, setCheckCount] = useState(0);
   const [error, setError] = useState(null);
   const startTs = useRef(0);
   const { feed, push, done, reset } = useStatusFeed();
@@ -41,6 +43,7 @@ function MapdokuGame({ opts = {}, onExit }) {
     setPoolId(poolIdInput || null);
     const init = {}; data.positions.forEach((_, i) => { init[i] = {}; });
     setGrid(init); setRevealed([]); setHintsUsed(0); setTimer(0);
+    setWrongCells({}); setCheckCount(0);
     startTs.current = Date.now();
     setPhase('playing');
   };
@@ -110,6 +113,12 @@ Devuelve EXACTAMENTE este JSON:
 
   const setCell = (posIdx, catName, value) => {
     setGrid((g) => ({ ...g, [posIdx]: { ...g[posIdx], [catName]: value } }));
+    // Limpia marca de error al cambiar
+    setWrongCells((w) => {
+      const k = `${posIdx}-${catName}`;
+      if (!w[k]) return w;
+      const n = { ...w }; delete n[k]; return n;
+    });
   };
 
   const isComplete = () => {
@@ -121,11 +130,18 @@ Devuelve EXACTAMENTE este JSON:
 
   const check = () => {
     let ok = true;
+    const wrongs = {};
+    let wrongCount = 0;
     puzzle.positions.forEach((_, i) => {
       puzzle.categories.forEach((c) => {
-        if (grid[i]?.[c.name] !== puzzle.solution[i][c.name]) ok = false;
+        if (grid[i]?.[c.name] !== puzzle.solution[i][c.name]) {
+          ok = false;
+          wrongs[`${i}-${c.name}`] = true;
+          wrongCount++;
+        }
       });
     });
+    setCheckCount(n => n + 1);
     if (ok) {
       setPhase('won');
       const duration = Math.floor((Date.now() - startTs.current) / 1000);
@@ -135,9 +151,17 @@ Devuelve EXACTAMENTE este JSON:
       if (difficulty === 'fácil') CC.grantMedal('mapdoku-easy');
       if (difficulty === 'difícil' && hintsUsed === 0) CC.grantMedal('mapdoku-hard');
       if (hintsUsed === 0) CC.grantMedal('no-hints');
+      const perfectBonus = hintsUsed === 0 ? 200 : 0;
+      CC.addScore(CC.calcScore({ difficulty, duration, hints: hintsUsed, perfectBonus }));
       CC.toast('¡Resuelto!', 'ok');
     } else {
-      CC.toast('Algo no encaja. Revisa tus pistas.', 'bad', 3000);
+      setWrongCells(wrongs);
+      // En fácil/medio mostramos cuántas; en difícil sólo "hay errores"
+      if (difficulty === 'difícil') {
+        CC.toast(`Algo no encaja. Revisa tus pistas. (${checkCount + 1}ª comprobación)`, 'bad', 3000);
+      } else {
+        CC.toast(`${wrongCount} celda${wrongCount === 1 ? '' : 's'} mal · marcadas en rojo`, 'bad', 3500);
+      }
     }
   };
 
@@ -199,11 +223,12 @@ Devuelve EXACTAMENTE este JSON:
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '2rem' }}>
         <Paper>
           <h3 className="font-display">El plano</h3>
-          <MapdokuGrid puzzle={puzzle} grid={grid} setCell={setCell} disabled={phase === 'won'} />
+          <MapdokuGrid puzzle={puzzle} grid={grid} setCell={setCell} wrongCells={wrongCells} disabled={phase === 'won'} />
           {phase === 'won' && (
             <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
               <Stamp solid style={{ fontSize: '1rem', padding: '.5rem 1.2rem' }}>CASO CERRADO</Stamp>
               <div className="muted tiny" style={{ marginTop: '.6rem' }}>Resuelto en {CC.fmtTime(timer)} con {hintsUsed} pista{hintsUsed === 1 ? '' : 's'}</div>
+              <ScoreReveal difficulty={difficulty} duration={timer} hints={hintsUsed} perfectBonus={hintsUsed === 0 ? 200 : 0} />
               <Leaderboard gameId="mapdoku" caseId={poolId} />
               <ShareBar gameId="mapdoku" poolId={poolId} caseData={puzzle} title={puzzle.title} difficulty={difficulty} />
               <button className="btn" style={{ marginTop: '1rem' }} onClick={() => { setPhase('setup'); setPuzzle(null); setPoolId(null); }}>Otro Mapdoku</button>
@@ -232,7 +257,7 @@ Devuelve EXACTAMENTE este JSON:
   );
 }
 
-function MapdokuGrid({ puzzle, grid, setCell, disabled }) {
+function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
   const [selected, setSelected] = useState(null); // {catName, value}
 
   // Para saber qué valores están ya usados en cada categoría
@@ -346,12 +371,14 @@ function MapdokuGrid({ puzzle, grid, setCell, disabled }) {
                 {puzzle.positions.map((_, i) => {
                   const val = grid[i]?.[cat.name];
                   const canPlaceHere = selected && selected.catName === cat.name;
+                  const isWrong = !!wrongCells[`${i}-${cat.name}`];
                   return (
                     <td key={i} style={{
-                      border: '1px dashed var(--ink-soft)',
+                      border: isWrong ? '2px solid var(--stamp-red)' : '1px dashed var(--ink-soft)',
                       padding: 0,
-                      background: canPlaceHere && !val ? 'rgba(80,140,200,.08)' : (val ? 'rgba(255,250,200,.4)' : 'transparent'),
+                      background: isWrong ? 'rgba(180,60,40,.18)' : (canPlaceHere && !val ? 'rgba(80,140,200,.08)' : (val ? 'rgba(255,250,200,.4)' : 'transparent')),
                       transition: 'background .15s',
+                      animation: isWrong ? 'mapdokuWrongPulse .6s ease-out' : 'none',
                     }}>
                       <button
                         disabled={disabled || (!val && !canPlaceHere)}

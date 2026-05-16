@@ -111,9 +111,11 @@ function GameRouter({ game, onExit }) {
 // ─── Lobby ─────────────────────────────────────────────────────────────
 function Lobby({ onLaunch, dailyList = [] }) {
   const medals = CC.getMedals();
-  const totalMedals = Object.values(medals).reduce((a, b) => a + (b.count || 0), 0);
+  const totalMedals = Object.values(medals).reduce((a, b) => a + (b?.count || 0), 0);
   const history = CC.getHistory();
   const wins = history.filter(h => h.won).length;
+  const streak = CC.getStreak();
+  const score = CC.getScore();
   const playDaily = async (gameId) => {
     try {
       const d = await CC.fetchDaily(gameId);
@@ -158,6 +160,9 @@ function Lobby({ onLaunch, dailyList = [] }) {
           <span className="pill">🏆 {totalMedals} medallas</span>
           <span className="pill">✅ {wins} casos resueltos</span>
           <span className="pill">📂 {history.length} partidas</span>
+          <span className="pill">⭐ {score.toLocaleString('es-ES')} pts</span>
+          {streak.current > 0 && <span className="pill" style={{ background: 'var(--stamp-red)', color: 'var(--paper)' }}>🔥 racha {streak.current}</span>}
+          {streak.best > 1 && <span className="pill">★ mejor racha {streak.best}</span>}
         </div>
       </div>
 
