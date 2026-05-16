@@ -80,14 +80,15 @@ Devuelve este JSON:
 {
   "title": "Título evocador",
   "intro": "Texto atmosférico de 3-4 frases que sitúa al jugador. Describe la habitación, la situación, por qué está cerrada.",
-  "imagePrompt": "Prompt en INGLÉS para generar una imagen de la habitación. Estilo: vintage detective, dimly lit, photograph, film grain.",
+  "imagePrompt": "Prompt en INGLÉS muy detallado para generar la imagen de la habitación. IMPORTANTÍSIMO: describe la posición espacial de CADA objeto usando lenguaje claro ('in the upper-left corner', 'on the wooden desk in the center-right', 'on the floor near the bottom-left', 'on the back wall above the fireplace'). Esto debe coincidir con los 'position' de cada objeto. Estilo al final: 'vintage detective scene, dimly lit, photograph, film grain, warm tungsten light, no text'.",
   "objects": [
     {
       "id": "kebab-case-id-unico",
       "name": "Nombre breve",
       "shortDesc": "Descripción breve (1 frase) que ve el jugador al entrar",
       "examineText": "Lo que descubre al examinar. Puede contener pistas, números, palabras, o sub-objetos.",
-      "containsItemId": "id-de-otro-objeto-o-null-si-no-contiene-nada"
+      "containsItemId": "id-de-otro-objeto-o-null-si-no-contiene-nada",
+      "position": [x, y, w, h]
     }
   ],
   "puzzles": [
@@ -104,7 +105,8 @@ Devuelve este JSON:
 IMPORTANTE:
 - "finalAnswer" en minúsculas, sin tildes, sin espacios extra
 - Los objetos deben tener pistas SUFICIENTES para llegar al final
-- "examineText" puede ser largo y atmosférico`;
+- "examineText" puede ser largo y atmosférico
+- "position" de cada objeto: [x, y, width, height] en PORCENTAJES (0-100) sobre la imagen. La x e y son la esquina superior-izquierda del rectángulo. Ej: [10, 60, 18, 22] = un objeto en la zona inferior-izquierda. Reparte los objetos por la imagen sin solaparlos demasiado. NO los pongas todos en el centro. El imagePrompt DEBE describir esas posiciones para que la imagen generada coincida lo mejor posible.`;
 
       const data = await CC.chatJSON({
         system: sys,
@@ -164,11 +166,32 @@ Respuesta final: ${room.finalAnswer} (${room.finalAnswerHint})
 Objetos ya examinados: ${Object.keys(inspected).join(', ') || 'ninguno'}.`;
 
       const history = chatLog.slice(-8).map(m => ({ role: m.who === 'me' ? 'user' : 'assistant', content: m.text }));
-      const content = await CC.chat({
-        system: sys,
-        messages: [...history, { role: 'user', content: userMsg }],
-        temperature: 0.7,
-      });
+      let content;
+      try {
+        if (image) {
+          // Con visión: el narrador "ve" la habitación
+          content = await CC.chatVision({
+            system: sys + '\n\nTIENES la imagen de la habitación adjunta. Puedes describir lo que el jugador señala basándote en lo que ves. Sé fiel a la imagen.',
+            prompt: userMsg,
+            images: [image],
+            temperature: 0.7,
+          });
+        } else {
+          content = await CC.chat({
+            system: sys,
+            messages: [...history, { role: 'user', content: userMsg }],
+            temperature: 0.7,
+          });
+        }
+      } catch (e) {
+        // Fallback sin visión si el modelo de visión falla
+        console.warn('vision falló, fallback a texto:', e.message);
+        content = await CC.chat({
+          system: sys,
+          messages: [...history, { role: 'user', content: userMsg }],
+          temperature: 0.7,
+        });
+      }
       setChatLog((log) => [...log, { who: 'them', text: content }]);
     } catch (e) {
       setChatLog((log) => [...log, { who: 'them', text: '(El narrador no responde… error: ' + e.message + ')' }]);
@@ -246,9 +269,24 @@ Objetos ya examinados: ${Object.keys(inspected).join(', ') || 'ninguno'}.`;
         {/* Columna izquierda: imagen + objetos */}
         <div className="col">
           {image ? (
-            <div className="polaroid" style={{ transform: 'rotate(-1deg)', alignSelf: 'flex-start' }}>
-              <img src={image} alt="Habitación" />
-              <div className="cap">la escena</div>
+            <div className="polaroid" style={{ alignSelf: 'flex-start', maxWidth: 520 }}>
+              <div className="image-with-hotspots">
+                <img src={image} alt="Habitación" />
+                {room.objects.filter(o => Array.isArray(o.position) && o.position.length === 4).map((obj, i) => {
+                  const [x, y, w, h] = obj.position;
+                  const examined = inspected[obj.id];
+                  return (
+                    <div key={obj.id}
+                      className={`hotspot ${examined ? 'examined' : ''}`}
+                      style={{ left: `${x}%`, top: `${y}%`, width: `${w}%`, height: `${h}%` }}
+                      onClick={() => examineObject(obj)}>
+                      <div className="pin">{i + 1}</div>
+                      <div className="label">{obj.name}{examined ? ' ✓' : ''}</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="cap">la escena · pulsa las marcas</div>
             </div>
           ) : (
             <Paper style={{ textAlign: 'center', padding: '2rem' }}>

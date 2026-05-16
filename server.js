@@ -24,6 +24,7 @@ app.use(express.json({ limit: '25mb' }));
 const OLLAMA_BASE   = process.env.OLLAMA_BASE_URL || 'https://ollama.com';
 const OLLAMA_KEY    = process.env.OLLAMA_API_KEY || '';
 const OLLAMA_MODEL  = process.env.OLLAMA_MODEL || 'gpt-oss:120b-cloud';
+const OLLAMA_VISION_MODEL = process.env.OLLAMA_VISION_MODEL || 'qwen2.5vl:32b';
 const OPENAI_KEY    = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL  = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
 const IMG_QUALITY   = process.env.OPENAI_IMAGE_QUALITY || 'low';
@@ -54,12 +55,12 @@ app.get('/api/config', (req, res) => {
 app.post('/api/chat', async (req, res) => {
   try {
     if (!OLLAMA_KEY) return res.status(503).json({ error: 'OLLAMA_API_KEY no configurada en el servidor' });
-    const { messages, system, json, model, temperature = 0.85 } = req.body || {};
+    const { messages, system, json, model, temperature = 0.85, vision = false } = req.body || {};
     if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'messages requerido' });
 
     const finalMessages = system ? [{ role: 'system', content: system }, ...messages] : messages;
     const body = {
-      model: model || OLLAMA_MODEL,
+      model: model || (vision ? OLLAMA_VISION_MODEL : OLLAMA_MODEL),
       messages: finalMessages,
       stream: false,
       options: { temperature },
@@ -390,6 +391,7 @@ app.listen(PORT, () => {
   console.log(`  ║  Cuarto Cerrado en  http://0.0.0.0:${PORT}  ║`);
   console.log(`  ╚════════════════════════════════════════╝`);
   console.log(`  Ollama: ${OLLAMA_KEY ? '✓' : '✗ falta OLLAMA_API_KEY'}  (${OLLAMA_MODEL})`);
+  console.log(`  Vision: ${OLLAMA_VISION_MODEL}`);
   console.log(`  OpenAI: ${OPENAI_KEY ? '✓' : '✗ falta OPENAI_API_KEY'}  (${OPENAI_MODEL} ${IMG_QUALITY})`);
   console.log(`  PIN:    ${ACCESS_PIN ? '✓ activado' : '✗ abierto'}\n`);
 });

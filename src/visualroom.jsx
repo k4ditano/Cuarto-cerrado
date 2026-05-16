@@ -20,6 +20,8 @@ function VisualGame({ opts = {}, onExit }) {
   const [image, setImage] = useState(null);
   const [answers, setAnswers] = useState({}); // {questionIdx: string}
   const [results, setResults] = useState(null); // {questionIdx: bool}
+  const [hintTexts, setHintTexts] = useState({}); // {questionIdx: string}
+  const [hintBusy, setHintBusy] = useState({});
   const [timer, setTimer] = useState(0);
   const [error, setError] = useState(null);
   const startTs = useRef(0);
@@ -110,6 +112,22 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
     }
   };
 
+  const visionHint = async (qi) => {
+    if (!image) return CC.toast('La imagen aún no está lista', 'bad');
+    if (hintTexts[qi]) return;
+    setHintBusy((b) => ({ ...b, [qi]: true }));
+    try {
+      const q = scenario.questions[qi];
+      const text = await CC.chatVision({
+        system: 'Eres un mentor que mira la imagen y guía con sutileza. NO digas directamente la respuesta. Da una pista de 1 frase que oriente al jugador.',
+        prompt: `Pregunta del puzzle: "${q.q}"\n\nLa respuesta correcta (no la reveles directamente) es: "${q.a}".\n\nDame una pista sutil basándote en lo que VES en la imagen, sin nombrar la respuesta exacta.`,
+        images: [image],
+      });
+      setHintTexts((h) => ({ ...h, [qi]: text }));
+    } catch (e) { CC.toast('Pista visual falló: ' + e.message, 'bad'); }
+    finally { setHintBusy((b) => ({ ...b, [qi]: false })); }
+  };
+
   const check = () => {
     const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
     const res = {};
@@ -190,6 +208,16 @@ Las respuestas deben ser COHERENTES con lo que pediste en imagePrompt. ${N} preg
                   onChange={(e) => setAnswers({ ...answers, [i]: e.target.value })}
                   disabled={phase === 'won' || results?.[i]}
                 />
+                {phase !== 'won' && !results?.[i] && !hintTexts[i] && CC.getSettings().hintsAllowed && (
+                  <button className="btn ghost small" onClick={() => visionHint(i)} disabled={hintBusy[i] || !image} style={{ marginTop: '.3rem', fontSize: '.65rem' }}>
+                    {hintBusy[i] ? '👁 mirando…' : '👁 pista visual'}
+                  </button>
+                )}
+                {hintTexts[i] && (
+                  <div className="tiny" style={{ marginTop: '.4rem', padding: '.4rem .6rem', background: 'rgba(180,140,80,.12)', borderLeft: '2px solid var(--stamp-blue)', fontStyle: 'italic' }}>
+                    👁 {hintTexts[i]}
+                  </div>
+                )}
                 {results && !results[i] && <div className="tiny muted" style={{ marginTop: '.2rem' }}>respuesta correcta: <em>{q.a}</em></div>}
               </div>
             ))}

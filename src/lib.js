@@ -30,8 +30,8 @@ async function apiFetch(path, body) {
   return r.json();
 }
 
-CC.chat = async function ({ messages, system, json = false, temperature = 0.85, model }) {
-  const { content } = await apiFetch('/api/chat', { messages, system, json, temperature, model });
+CC.chat = async function ({ messages, system, json = false, temperature = 0.85, model, vision = false }) {
+  const { content } = await apiFetch('/api/chat', { messages, system, json, temperature, model, vision });
   return content;
 };
 
@@ -51,6 +51,32 @@ CC.chatJSON = async function (opts) {
 CC.image = async function ({ prompt, size = '1024x1024', quality = 'low' }) {
   const { image } = await apiFetch('/api/image', { prompt, size, quality });
   return image;
+};
+
+// ─── Vision helpers ────────────────────────────────────────────────────
+// Converts data:image/...;base64,XXX → "XXX" (Ollama format)
+CC.imageToBase64 = (url) => {
+  if (!url) return null;
+  if (url.startsWith('data:')) return url.split(',')[1];
+  return url;
+};
+
+// Chat con visión. images = array de data URLs.
+CC.chatVision = async function ({ prompt, images, system, temperature = 0.5, json = false }) {
+  const cleanImages = (images || []).map(CC.imageToBase64).filter(Boolean);
+  const messages = [{ role: 'user', content: prompt, images: cleanImages }];
+  return CC.chat({ messages, system, temperature, vision: true, json });
+};
+
+CC.chatVisionJSON = async function (opts) {
+  const text = await CC.chatVision({ ...opts, json: true });
+  const cleaned = (text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  try { return JSON.parse(cleaned); }
+  catch (e) {
+    const m = cleaned.match(/[\{\[][\s\S]*[\}\]]/);
+    if (m) { try { return JSON.parse(m[0]); } catch {} }
+    throw new Error('Visión devolvió no-JSON: ' + cleaned.slice(0, 200));
+  }
 };
 
 // ─── Storage: history, medals, settings ────────────────────────────────

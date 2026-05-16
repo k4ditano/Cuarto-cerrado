@@ -95,6 +95,27 @@ Con `OPENAI_IMAGE_QUALITY=low` (~$0.006 / imagen) y modelos cloud de Ollama, una
 | Habitación visual | 1 |
 | Sorpréndeme | variable |
 
+## 👁 Visión: hotspots y narrador que ve
+
+Algunos modos usan un **modelo de visión** (ej. Qwen2.5-VL o Gemma 3) para mejorar la experiencia:
+
+- **Escape Room**: la IA, al generar la habitación, asigna a cada objeto una posición [x, y, w, h] sobre la imagen. Se renderizan como **marcas circulares** con pin rojo (verde al examinar) y tooltip en estilo manuscrito. Pulsa sobre la marca para examinar el objeto.
+- **Narrador con visión**: al chatear con el narrador en escape room, la IA recibe la imagen junto a tu mensaje. Cuando preguntes "¿qué hay debajo de la lámpara?" realmente mira la imagen para responder.
+- **Habitación Visual → pista visual**: cada pregunta tiene un botón **"👁 pista visual"** que pide a la IA mirar la imagen y darte una pista sin desvelar la respuesta.
+
+### Configurar el modelo de visión
+
+Por defecto: `OLLAMA_VISION_MODEL=qwen2.5vl:32b` (requiere Ollama local con ese modelo).
+
+Alternativas si tienes Ollama local:
+- `gemma3:27b` — multimodal de Google
+- `llava:13b` — más ligero
+- `qwen2.5vl:7b` — ligero
+
+Si no tienes modelo de visión disponible, los hotspots **siguen funcionando** (vienen del JSON estructurado), pero las preguntas libres caerán al modelo de texto normal.
+
+> En Ollama Cloud los modelos con visión disponibles cambian con frecuencia. Revisa [ollama.com/library](https://ollama.com/library) y filtra por `vision`.
+
 ## 📚 Archivo compartido (pool)
 
 **Cada caso generado se guarda automáticamente** en `data/pool/<gameId>/` con un índice. La próxima vez que cualquier usuario abra ese modo:
