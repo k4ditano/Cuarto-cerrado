@@ -35,17 +35,56 @@ CC.chat = async function ({ messages, system, json = false, temperature = 0.85, 
   return content;
 };
 
+// Best-effort JSON repair: strip fences/BOM/control chars, trailing commas,
+// extract balanced root, fix common unescaped newlines inside strings.
+CC.repairJSON = function (raw) {
+  if (!raw) return '';
+  let s = String(raw);
+  // strip BOM and zero-width
+  s = s.replace(/^﻿/, '').replace(/[​-‍⁠]/g, '');
+  // strip code fences
+  s = s.replace(/^```(?:json|JSON)?\s*/i, '').replace(/```\s*$/, '').trim();
+  // strip preamble before first { or [
+  const first = s.search(/[\{\[]/);
+  if (first > 0) s = s.slice(first);
+  // walk to find balanced root (respect strings + escapes)
+  const open = s[0]; if (open !== '{' && open !== '[') return s;
+  const close = open === '{' ? '}' : ']';
+  let depth = 0, inStr = false, esc = false, end = -1;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (esc) { esc = false; continue; }
+    if (c === '\\') { esc = true; continue; }
+    if (c === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (c === open) depth++;
+    else if (c === close) { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end > 0) s = s.slice(0, end + 1);
+  // drop trailing commas before } or ]
+  s = s.replace(/,(\s*[\}\]])/g, '$1');
+  // remove stray control chars except \t\n\r
+  s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  return s;
+};
+
+CC.parseJSONLoose = function (raw) {
+  const cleaned = CC.repairJSON(raw);
+  try { return JSON.parse(cleaned); } catch {}
+  // last resort: escape raw newlines inside string values
+  try {
+    const fixed = cleaned.replace(/"((?:[^"\\]|\\.)*)"/g, (m) => m.replace(/\r?\n/g, '\\n'));
+    return JSON.parse(fixed);
+  } catch {}
+  // try outermost {...} match
+  const m = cleaned.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch {} }
+  throw new Error('La IA devolvió algo no-JSON: ' + cleaned.slice(0, 200));
+};
+
 CC.chatJSON = async function (opts) {
   const text = await CC.chat({ ...opts, json: true });
-  // Some models wrap JSON in ```json … ``` — strip it
-  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-  try { return JSON.parse(cleaned); }
-  catch (e) {
-    // try to extract first {...} or [...]
-    const m = cleaned.match(/[\{\[][\s\S]*[\}\]]/);
-    if (m) { try { return JSON.parse(m[0]); } catch {} }
-    throw new Error('La IA devolvió algo no-JSON: ' + cleaned.slice(0, 200));
-  }
+  return CC.parseJSONLoose(text);
 };
 
 CC.image = async function ({ prompt, size = '1024x1024', quality = 'low' }) {
@@ -70,13 +109,7 @@ CC.chatVision = async function ({ prompt, images, system, temperature = 0.5, jso
 
 CC.chatVisionJSON = async function (opts) {
   const text = await CC.chatVision({ ...opts, json: true });
-  const cleaned = (text || '').replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
-  try { return JSON.parse(cleaned); }
-  catch (e) {
-    const m = cleaned.match(/[\{\[][\s\S]*[\}\]]/);
-    if (m) { try { return JSON.parse(m[0]); } catch {} }
-    throw new Error('Visión devolvió no-JSON: ' + cleaned.slice(0, 200));
-  }
+  return CC.parseJSONLoose(text);
 };
 
 // ─── Storage: history, medals, settings ────────────────────────────────

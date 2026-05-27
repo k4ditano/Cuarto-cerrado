@@ -13,12 +13,64 @@ const MAPDOKU_THEMES = [
   'cuatro torres de un castillo encantado',
 ];
 
+// Pide a la IA que verifique cada pista contra la solución y reescriba
+// las que no se cumplan. Devuelve un nuevo array de pistas o null si todo OK.
+async function verifyAndFixClues(puzzle) {
+  const solutionRows = puzzle.positions.map((pos, i) => {
+    const row = puzzle.solution[i] || {};
+    const parts = puzzle.categories.map((c) => `${c.name}=${row[c.name] ?? '?'}`).join(', ');
+    return `${i + 1}) ${pos}: ${parts}`;
+  }).join('\n');
+  const cluesList = puzzle.clues.map((c, i) => `${i + 1}. ${c}`).join('\n');
+  const sys = 'Eres un verificador de puzzles de lógica. Compruebas si cada pista es VERDADERA dada la solución, sin ambigüedad. Respondes SOLO con JSON.';
+  const prompt = `Solución del puzzle (autoritativa, no la cuestiones):
+${solutionRows}
+
+Categorías y valores válidos:
+${puzzle.categories.map(c => `- ${c.name}: ${c.values.join(', ')}`).join('\n')}
+
+Pistas a auditar:
+${cluesList}
+
+Para cada pista:
+- Indica si es VERDADERA dada la solución (true) o FALSA/ambigua/contradictoria (false).
+- Si es falsa, escribe una versión "corrected" que SÍ se cumpla exactamente con la solución, manteniendo el tono y la dificultad. No inventes datos fuera de la solución.
+- Si es verdadera, "corrected" debe ser la pista original tal cual.
+
+Devuelve EXACTAMENTE este JSON:
+{
+  "checks": [
+    {"idx": 1, "ok": true, "corrected": "..."},
+    ...
+  ]
+}`;
+  const result = await CC.chatJSON({
+    system: sys,
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.2,
+  });
+  if (!result?.checks || !Array.isArray(result.checks)) return null;
+  const out = [...puzzle.clues];
+  let changed = false;
+  result.checks.forEach((chk) => {
+    const i = (chk.idx | 0) - 1;
+    if (i < 0 || i >= out.length) return;
+    if (chk.ok === false && typeof chk.corrected === 'string' && chk.corrected.trim()) {
+      out[i] = chk.corrected.trim();
+      changed = true;
+    }
+  });
+  return changed ? out : null;
+}
+
 function MapdokuGame({ opts = {}, onExit }) {
   const [phase, setPhase] = useState(opts.caseData ? 'loading' : 'setup'); // setup, loading, playing, won, lost
   const [difficulty, setDifficulty] = useState(opts.difficulty || 'medio');
   const [puzzle, setPuzzle] = useState(null);
   const [poolId, setPoolId] = useState(null);
   const [grid, setGrid] = useState({}); // {posIdx: {catName: value}}
+  const [notes, setNotes] = useState({}); // {posIdx: {catName: [values]}} marcas tentativas
+  const [noteMode, setNoteMode] = useState(false); // si true, colocar = marca tentativa
   const [revealed, setRevealed] = useState([]); // clue indices revealed via hint
   const [timer, setTimer] = useState(0);
   const [hintsUsed, setHintsUsed] = useState(0);
@@ -42,7 +94,8 @@ function MapdokuGame({ opts = {}, onExit }) {
     setPuzzle(data);
     setPoolId(poolIdInput || null);
     const init = {}; data.positions.forEach((_, i) => { init[i] = {}; });
-    setGrid(init); setRevealed([]); setHintsUsed(0); setTimer(0);
+    setGrid(init); setNotes({}); setNoteMode(false);
+    setRevealed([]); setHintsUsed(0); setTimer(0);
     setWrongCells({}); setCheckCount(0);
     startTs.current = Date.now();
     setPhase('playing');
@@ -85,19 +138,40 @@ Devuelve EXACTAMENTE este JSON:
 
       done('Llamando al archivero…');
       push('Tachando posibilidades imposibles');
-      const data = await CC.chatJSON({
-        system: sys,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.9,
-      });
+      let data;
+      try {
+        data = await CC.chatJSON({
+          system: sys,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.9,
+        });
+      } catch (eFirst) {
+        push('JSON dudoso. Reintentando con temperatura menor…');
+        data = await CC.chatJSON({
+          system: sys,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.5,
+        });
+      }
       done();
       push('Verificando que la solución cuadre');
 
       if (!data.positions || !data.categories || !data.solution) throw new Error('Respuesta incompleta');
       if (data.solution.length !== data.positions.length) throw new Error('Solución no cuadra con posiciones');
+      if (!Array.isArray(data.clues) || data.clues.length === 0) throw new Error('Sin pistas');
       done();
+
+      push('Auditando pistas contra la solución');
+      try {
+        const fixed = await verifyAndFixClues(data);
+        if (fixed) data.clues = fixed;
+      } catch (eVerify) {
+        console.warn('Verificación de pistas falló', eVerify);
+      }
+      done();
+
       push('Sellando el expediente');
-      await new Promise(r => setTimeout(r, 350));
+      await new Promise(r => setTimeout(r, 250));
       done();
       push('Archivando para uso futuro');
       const saved = await CC.poolSave('mapdoku', data, difficulty, data.title);
@@ -113,6 +187,15 @@ Devuelve EXACTAMENTE este JSON:
 
   const setCell = (posIdx, catName, value) => {
     setGrid((g) => ({ ...g, [posIdx]: { ...g[posIdx], [catName]: value } }));
+    // Al fijar un definitivo, limpia notas de esa celda
+    if (value) {
+      setNotes((nMap) => {
+        const row = nMap[posIdx];
+        if (!row?.[catName]) return nMap;
+        const newRow = { ...row }; delete newRow[catName];
+        return { ...nMap, [posIdx]: newRow };
+      });
+    }
     // Limpia marca de error al cambiar
     setWrongCells((w) => {
       const k = `${posIdx}-${catName}`;
@@ -120,6 +203,21 @@ Devuelve EXACTAMENTE este JSON:
       const n = { ...w }; delete n[k]; return n;
     });
   };
+
+  // Alterna una marca tentativa en (posIdx, catName) para un valor.
+  const toggleNote = (posIdx, catName, value) => {
+    if (!value) return;
+    setNotes((nMap) => {
+      const row = { ...(nMap[posIdx] || {}) };
+      const arr = Array.isArray(row[catName]) ? [...row[catName]] : [];
+      const i = arr.indexOf(value);
+      if (i === -1) arr.push(value); else arr.splice(i, 1);
+      if (arr.length) row[catName] = arr; else delete row[catName];
+      return { ...nMap, [posIdx]: row };
+    });
+  };
+
+  const clearAllNotes = () => setNotes({});
 
   const isComplete = () => {
     if (!puzzle) return false;
@@ -209,6 +307,17 @@ Devuelve EXACTAMENTE este JSON:
       timer={timer}
       right={
         <div className="row gap-sm wrap">
+          <button
+            className={`btn small ${noteMode ? '' : 'ghost'}`}
+            onClick={() => setNoteMode(m => !m)}
+            disabled={phase === 'won'}
+            title="En modo tentativo, colocar un valor solo lo apunta como marca mental (otro color), no lo fija."
+            style={noteMode ? { background: 'oklch(0.55 0.14 240)', color: '#fff', borderColor: 'oklch(0.4 0.14 240)' } : null}>
+            {noteMode ? '✎ Tentativo' : '◉ Definitivo'}
+          </button>
+          <button className="btn ghost small" onClick={clearAllNotes} disabled={phase === 'won' || !Object.keys(notes).some(k => Object.keys(notes[k] || {}).length)}>
+            Borrar marcas
+          </button>
           <button className="btn ghost small" onClick={reveal} disabled={!CC.getSettings().hintsAllowed || revealed.length >= puzzle.clues.length}>
             Pista {hintsUsed > 0 ? `(${hintsUsed})` : ''}
           </button>
@@ -223,7 +332,7 @@ Devuelve EXACTAMENTE este JSON:
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 320px', gap: '2rem' }}>
         <Paper>
           <h3 className="font-display">El plano</h3>
-          <MapdokuGrid puzzle={puzzle} grid={grid} setCell={setCell} wrongCells={wrongCells} disabled={phase === 'won'} />
+          <MapdokuGrid puzzle={puzzle} grid={grid} setCell={setCell} notes={notes} toggleNote={toggleNote} noteMode={noteMode} wrongCells={wrongCells} disabled={phase === 'won'} />
           {phase === 'won' && (
             <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
               <Stamp solid style={{ fontSize: '1rem', padding: '.5rem 1.2rem' }}>CASO CERRADO</Stamp>
@@ -257,10 +366,10 @@ Devuelve EXACTAMENTE este JSON:
   );
 }
 
-function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
+function MapdokuGrid({ puzzle, grid, setCell, notes = {}, toggleNote = () => {}, noteMode = false, wrongCells = {}, disabled }) {
   const [selected, setSelected] = useState(null); // {catName, value}
 
-  // Para saber qué valores están ya usados en cada categoría
+  // Para saber qué valores están ya usados en cada categoría (solo definitivos)
   const usedByCategory = {};
   puzzle.categories.forEach((cat) => {
     usedByCategory[cat.name] = new Set();
@@ -283,9 +392,13 @@ function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
   const placeIn = (posIdx) => {
     if (!selected) return;
     if (selected.catName !== null) {
-      // Si ya hay un chip aquí (mismo cat), lo reemplazamos
-      setCell(posIdx, selected.catName, selected.value);
-      setSelected(null);
+      if (noteMode) {
+        // Modo tentativo: alterna marca y mantiene chip seleccionado para marcar varias celdas
+        toggleNote(posIdx, selected.catName, selected.value);
+      } else {
+        setCell(posIdx, selected.catName, selected.value);
+        setSelected(null);
+      }
     }
   };
 
@@ -310,21 +423,24 @@ function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
               {cat.values.map((v) => {
                 const used = usedByCategory[cat.name].has(v);
                 const isSelected = selected?.catName === cat.name && selected?.value === v;
+                // En modo tentativo permitimos seleccionar aunque esté usado
+                const blocked = used && !isSelected && !noteMode;
+                const noteBg = 'oklch(0.55 0.14 240)';
                 return (
                   <button
                     key={v}
-                    disabled={disabled || (used && !isSelected)}
+                    disabled={disabled || blocked}
                     onClick={() => setSelected(isSelected ? null : { catName: cat.name, value: v })}
                     style={{
                       fontFamily: 'Caveat, cursive',
                       fontSize: '1.15rem',
                       padding: '.3rem .8rem',
-                      background: isSelected ? 'var(--ink)' : (used ? 'rgba(50,40,30,.15)' : 'var(--paper)'),
-                      color: isSelected ? 'var(--paper)' : (used ? 'var(--ink-soft)' : 'var(--ink)'),
-                      border: `1px dashed ${isSelected ? 'var(--ink)' : 'var(--ink-soft)'}`,
+                      background: isSelected ? (noteMode ? noteBg : 'var(--ink)') : (used ? 'rgba(50,40,30,.15)' : 'var(--paper)'),
+                      color: isSelected ? 'var(--paper)' : (used && !noteMode ? 'var(--ink-soft)' : 'var(--ink)'),
+                      border: `1px dashed ${isSelected ? (noteMode ? noteBg : 'var(--ink)') : 'var(--ink-soft)'}`,
                       borderRadius: 14,
-                      cursor: disabled || (used && !isSelected) ? 'default' : 'pointer',
-                      textDecoration: used && !isSelected ? 'line-through' : 'none',
+                      cursor: disabled || blocked ? 'default' : 'pointer',
+                      textDecoration: used && !isSelected && !noteMode ? 'line-through' : 'none',
                       transition: 'transform .1s',
                       transform: isSelected ? 'scale(1.05)' : 'scale(1)',
                     }}>
@@ -338,8 +454,8 @@ function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
       </div>
 
       {selected && (
-        <div className="tiny" style={{ marginBottom: '.6rem', padding: '.4rem .7rem', background: 'rgba(80,140,200,.1)', borderLeft: '3px solid var(--stamp-blue)' }}>
-          <strong>{selected.value}</strong> seleccionado · pulsa en una celda de <strong>{selected.catName}</strong> para colocarlo. <button className="btn ghost small" onClick={() => setSelected(null)} style={{ marginLeft: '.5rem', padding: '.1rem .4rem', fontSize: '.65rem' }}>cancelar</button>
+        <div className="tiny" style={{ marginBottom: '.6rem', padding: '.4rem .7rem', background: noteMode ? 'rgba(80,140,200,.18)' : 'rgba(80,140,200,.1)', borderLeft: `3px solid ${noteMode ? 'oklch(0.55 0.14 240)' : 'var(--stamp-blue)'}` }}>
+          <strong>{selected.value}</strong> seleccionado · pulsa celdas de <strong>{selected.catName}</strong> para {noteMode ? 'marcarlas como mapa mental (no fija nada)' : 'colocarlo'}. <button className="btn ghost small" onClick={() => setSelected(null)} style={{ marginLeft: '.5rem', padding: '.1rem .4rem', fontSize: '.65rem' }}>cancelar</button>
         </div>
       )}
 
@@ -370,32 +486,65 @@ function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
                 </td>
                 {puzzle.positions.map((_, i) => {
                   const val = grid[i]?.[cat.name];
+                  const cellNotes = notes[i]?.[cat.name] || [];
                   const canPlaceHere = selected && selected.catName === cat.name;
                   const isWrong = !!wrongCells[`${i}-${cat.name}`];
+                  const noteColor = 'oklch(0.55 0.14 240)';
+                  const noteBgSoft = 'rgba(80,140,200,.10)';
                   return (
                     <td key={i} style={{
                       border: isWrong ? '2px solid var(--stamp-red)' : '1px dashed var(--ink-soft)',
                       padding: 0,
-                      background: isWrong ? 'rgba(180,60,40,.18)' : (canPlaceHere && !val ? 'rgba(80,140,200,.08)' : (val ? 'rgba(255,250,200,.4)' : 'transparent')),
+                      background: isWrong ? 'rgba(180,60,40,.18)' : (canPlaceHere && !val ? (noteMode ? noteBgSoft : 'rgba(80,140,200,.08)') : (val ? 'rgba(255,250,200,.4)' : (cellNotes.length ? noteBgSoft : 'transparent'))),
                       transition: 'background .15s',
                       animation: isWrong ? 'mapdokuWrongPulse .6s ease-out' : 'none',
                     }}>
                       <button
-                        disabled={disabled || (!val && !canPlaceHere)}
+                        disabled={disabled || (!val && !canPlaceHere && cellNotes.length === 0)}
                         onClick={() => {
-                          if (val) removeFromCell(i, cat.name);
-                          else placeIn(i);
+                          if (val) { removeFromCell(i, cat.name); return; }
+                          if (canPlaceHere) { placeIn(i); return; }
                         }}
                         style={{
-                          width: '100%', minWidth: 110, height: 60,
+                          width: '100%', minWidth: 110, minHeight: 60,
                           background: 'transparent',
                           border: 'none',
                           cursor: disabled ? 'default' : (val || canPlaceHere ? 'pointer' : 'default'),
                           fontFamily: 'Caveat, cursive', fontSize: '1.3rem', color: 'var(--ink)',
                           padding: '.3rem',
+                          display: 'block',
                         }}
-                        title={val ? 'Click para quitar' : (canPlaceHere ? `Colocar ${selected.value}` : '')}>
-                        {val || (canPlaceHere ? <span style={{ fontSize: '1.6rem', opacity: .35 }}>+</span> : <span style={{ fontFamily: 'Special Elite', fontSize: '.7rem', color: 'var(--ink-soft)', letterSpacing: '.15em' }}>—</span>)}
+                        title={val ? 'Click para quitar' : (canPlaceHere ? (noteMode ? `Marcar ${selected.value} (tentativo)` : `Colocar ${selected.value}`) : '')}>
+                        {val ? (
+                          val
+                        ) : cellNotes.length ? (
+                          <div className="row gap-sm wrap" style={{ justifyContent: 'center', gap: '.25rem' }}>
+                            {cellNotes.map((n) => (
+                              <span
+                                key={n}
+                                role="button"
+                                onClick={(e) => { e.stopPropagation(); if (!disabled) toggleNote(i, cat.name, n); }}
+                                style={{
+                                  fontFamily: 'Caveat, cursive',
+                                  fontSize: '.85rem',
+                                  padding: '.05rem .4rem',
+                                  background: 'transparent',
+                                  color: noteColor,
+                                  border: `1px dashed ${noteColor}`,
+                                  borderRadius: 10,
+                                  cursor: disabled ? 'default' : 'pointer',
+                                  lineHeight: 1.1,
+                                }}
+                                title="Click para borrar esta marca">
+                                {n}
+                              </span>
+                            ))}
+                          </div>
+                        ) : (canPlaceHere ? (
+                          <span style={{ fontSize: '1.6rem', opacity: .35 }}>{noteMode ? '✎' : '+'}</span>
+                        ) : (
+                          <span style={{ fontFamily: 'Special Elite', fontSize: '.7rem', color: 'var(--ink-soft)', letterSpacing: '.15em' }}>—</span>
+                        ))}
                       </button>
                     </td>
                   );
@@ -407,7 +556,7 @@ function MapdokuGrid({ puzzle, grid, setCell, wrongCells = {}, disabled }) {
       </div>
 
       <div className="tiny muted" style={{ marginTop: '.8rem', textAlign: 'center' }}>
-        Pulsa un chip arriba → pulsa una casilla para colocarlo · pulsa un chip ya colocado para quitarlo
+        Chip arriba → casilla para colocarlo · click en chip puesto para quitarlo · botón <strong>Tentativo</strong> para marcar varias casillas sin fijar (mapa mental, en azul)
       </div>
     </>
   );

@@ -73,11 +73,21 @@ Devuelve este JSON:
 
 IMPORTANTE: la concatenación de la primera letra de cada respuesta DEBE formar exactamente "finalPhrase". Verifícalo antes de responder.`;
 
-      const data = await CC.chatJSON({
-        system: sys,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.9,
-      });
+      let data;
+      try {
+        data = await CC.chatJSON({
+          system: sys,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.9,
+        });
+      } catch (e1) {
+        push('La IA devolvió JSON dudoso. Reintentando…');
+        data = await CC.chatJSON({
+          system: sys,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.6,
+        });
+      }
       if (!data.riddles || data.riddles.length < 3) throw new Error('Respuesta incompleta');
       done();
       push('Escondiendo la frase secreta en las iniciales');
